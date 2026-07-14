@@ -1,11 +1,11 @@
 use tokio::io::AsyncReadExt;
 use tokio::sync::watch;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, Duration};
 use tokio_serial::SerialPortBuilderExt;
 
+use crate::sensorler::m8n::DParse::{HFirst, HSec};
 use crate::veri_tipleri::GpsVeri;
 
-#[derive(Clone, Copy)]
 enum DParse {
     HFirst,
     HSec,
@@ -21,8 +21,7 @@ pub async fn gps_task(
 
         let mut usb_port = match tokio_serial::new(&port_adi, baud_rate).open_native_async() {
             Ok(port) => {
-                println!("GPS USB bağlantısı kuruldu: {}", port_adi);
-                println!("GPS için 0xAA 0xBB başlıklı 33 baytlık paket bekleniyor.");
+                println!("GPS bağlantısı kuruldu: {}", port_adi);
                 port
             }
             Err(e) => {
@@ -35,53 +34,31 @@ pub async fn gps_task(
         let mut buf = [0u8; 1];
         let mut bucket = [0u8; 31];
         let mut durum = DParse::HFirst;
-        let mut crc_hata = 0u64;
-        let mut gecerli_paket = 0u64;
+        let mut gecerli_paket: u64 = 0;
+        let mut crc_hatasi: u64 = 0;
 
         'baglanti: loop {
             match durum {
-                DParse::HFirst => {
-                    match timeout(Duration::from_secs(3), usb_port.read_exact(&mut buf)).await {
-                        Ok(Ok(_)) => {
-                            if buf[0] == 0xAA {
-                                durum = DParse::HSec;
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            eprintln!("GPS USB okuma hatası: {e}");
-                            break 'baglanti;
-                        }
-                        Err(_) => {
-                            eprintln!("[GPS UYARI] Port açık fakat 3 saniyedir Pico'dan tek bayt gelmedi.");
-                        }
+                HFirst => {
+                    if let Err(e) = usb_port.read_exact(&mut buf).await {
+                        eprintln!("GPS okuma bağlantı hatası: {e}");
+                        break 'baglanti;
+                    }
+
+                    if buf[0] == 0xAA {
+                        durum = DParse::HSec;
                     }
                 }
-                DParse::HSec => {
-                    match timeout(Duration::from_secs(1), usb_port.read_exact(&mut buf)).await {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            eprintln!("GPS USB okuma hatası: {e}");
-                            break 'baglanti;
-                        }
-                        Err(_) => {
-                            eprintln!("[GPS UYARI] Paket başlığının ikinci baytı zaman aşımına uğradı.");
-                            durum = DParse::HFirst;
-                            continue;
-                        }
+                HSec => {
+                    if let Err(e) = usb_port.read_exact(&mut buf).await {
+                        eprintln!("GPS okuma bağlantı hatası: {e}");
+                        break 'baglanti;
                     }
 
                     if buf[0] == 0xBB {
-                        match timeout(Duration::from_secs(1), usb_port.read_exact(&mut bucket)).await {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(e)) => {
-                                eprintln!("GPS paketi yarım kaldı: {e}");
-                                break 'baglanti;
-                            }
-                            Err(_) => {
-                                eprintln!("[GPS UYARI] 31 baytlık paket gövdesi tamamlanmadı.");
-                                durum = DParse::HFirst;
-                                continue;
-                            }
+                        if let Err(e) = usb_port.read_exact(&mut bucket).await {
+                            eprintln!("GPS paketi yarım kaldı: {e}");
+                            break 'baglanti;
                         }
 
                         let mut calc_checksum = 0u8;
@@ -113,8 +90,21 @@ pub async fn gps_task(
                             };
 
                             gecerli_paket = gecerli_paket.wrapping_add(1);
-                            if gecerli_paket == 1 {
-                                println!("[GPS OK] İlk geçerli M8N paketi alındı.");
+
+                            if gecerli_paket == 1 || gecerli_paket % 5 == 0 {
+                                println!(
+                                    "[GPS OK] port={} paket={} crc_hata={} fix={} uydu={} enlem={:.7} boylam={:.7} hiz_mm_s={} yonelim_raw={} pico_ms={}",
+                                    port_adi,
+                                    gecerli_paket,
+                                    crc_hatasi,
+                                    paket.algi_boyut,
+                                    paket.uydu_sayi,
+                                    paket.enlem as f64 / 10_000_000.0,
+                                    paket.boylam as f64 / 10_000_000.0,
+                                    paket.hiz,
+                                    paket.yonelim,
+                                    paket.zaman_ms,
+                                );
                             }
 
                             if tx.send(paket).is_err() {
@@ -122,13 +112,16 @@ pub async fn gps_task(
                                 return;
                             }
                         } else {
-                            crc_hata = crc_hata.wrapping_add(1);
-                            eprintln!(
-                                "[GPS CRC HATA] hesaplanan=0x{:02X}, gelen=0x{:02X}, toplam_hata={}",
-                                calc_checksum,
-                                bucket[30],
-                                crc_hata
-                            );
+                            crc_hatasi = crc_hatasi.wrapping_add(1);
+                            if crc_hatasi == 1 || crc_hatasi % 10 == 0 {
+                                eprintln!(
+                                    "[GPS CRC HATA] port={} hata={} hesap={:02X} gelen={:02X}. Portlar ters olabilir.",
+                                    port_adi,
+                                    crc_hatasi,
+                                    calc_checksum,
+                                    bucket[30],
+                                );
+                            }
                         }
 
                         durum = DParse::HFirst;
