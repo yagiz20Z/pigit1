@@ -1,5 +1,3 @@
-use crate::veri_tipleri::GelenTelemetri::RotaBelirle;
-
 #[derive(Debug, Clone, Default)]
 pub struct MotorVeri
 {

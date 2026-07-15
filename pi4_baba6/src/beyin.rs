@@ -237,7 +237,7 @@ pub async fn nav_task(
     let mut last_time = Instant::now();
     let mut nav = NavData::new();
     let mut pid = PidKontrolcu::new(4.0, 0.1, 0.5, 150.0);
-    let base_hiz = 400.0;
+    let base_hiz: f32 = 400.0;
     let mut kaba_donus_modu = false;
     let mut guncel_mod = AracMod::Manuel;
     let mut telemetri_sayaci = 0;
