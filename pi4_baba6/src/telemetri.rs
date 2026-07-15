@@ -22,9 +22,24 @@ fn parse_yk_komut(payload: &str) -> Option<GelenTelemetri> {
         }
         "MAN" => {
             let mut vals = args?.split(',');
-            let gaz = vals.next()?.parse::<f32>().ok()?;
-            let aci = vals.next()?.parse::<f32>().ok()?;
-            Some(GelenTelemetri::ManuelKontrol(gaz, aci))
+            let ileri = vals.next()?.parse::<f32>().ok()?;
+            let yatay = vals.next()?.parse::<f32>().ok()?;
+            Some(GelenTelemetri::ManuelKontrol(ileri, yatay))
+        }
+        "MAP" => {
+            let mut vals = args?.split(',');
+            let esleme = MotorEsleme {
+                sol: vals.next()?.parse::<u8>().ok()?,
+                ileri1: vals.next()?.parse::<u8>().ok()?,
+                sag: vals.next()?.parse::<u8>().ok()?,
+                ileri2: vals.next()?.parse::<u8>().ok()?,
+            };
+
+            if vals.next().is_some() || !esleme.gecerli() {
+                None
+            } else {
+                Some(GelenTelemetri::MotorEslemeDegistir(esleme))
+            }
         }
         "ROTA" => {
             let mut noktalar = Vec::new();

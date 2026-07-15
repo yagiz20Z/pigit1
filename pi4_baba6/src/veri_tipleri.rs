@@ -1,3 +1,50 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotorEsleme
+{
+    /// Sola yatay hareketi sağlayan fiziksel motor kanalı (1..=4)
+    pub sol: u8,
+    /// Birinci ileri motorun fiziksel kanalı (1..=4)
+    pub ileri1: u8,
+    /// Sağa yatay hareketi sağlayan fiziksel motor kanalı (1..=4)
+    pub sag: u8,
+    /// İkinci ileri motorun fiziksel kanalı (1..=4)
+    pub ileri2: u8,
+}
+
+impl Default for MotorEsleme
+{
+    fn default() -> Self
+    {
+        Self
+        {
+            sol: 1,
+            ileri1: 2,
+            sag: 3,
+            ileri2: 4,
+        }
+    }
+}
+
+impl MotorEsleme
+{
+    pub fn gecerli(&self) -> bool
+    {
+        let kanallar = [self.sol, self.ileri1, self.sag, self.ileri2];
+        let mut goruldu = [false; 5];
+
+        for kanal in kanallar
+        {
+            if !(1..=4).contains(&kanal) || goruldu[kanal as usize]
+            {
+                return false;
+            }
+            goruldu[kanal as usize] = true;
+        }
+
+        true
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MotorVeri
 {
@@ -78,6 +125,8 @@ pub enum GelenTelemetri
     GoreviBaslat,
     AcilDurdur,
     ManuelKontrol(f32,f32),
+    /// Sıra: sol, ileri1, sağ, ileri2. Değerler fiziksel M1..M4 kanallarıdır.
+    MotorEslemeDegistir(MotorEsleme),
 }
 
 #[derive(Debug, Default, Clone)]

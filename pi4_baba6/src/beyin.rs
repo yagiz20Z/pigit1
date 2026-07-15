@@ -1,5 +1,5 @@
 use tokio::{sync::{mpsc, watch}, time::interval};
-use crate::veri_tipleri::{AracMod, GelenTelemetri, GidenTelemetri, GpsVeri, ImuVeri, MotorVeri};
+use crate::veri_tipleri::{AracMod, GelenTelemetri, GidenTelemetri, GpsVeri, ImuVeri, MotorEsleme, MotorVeri};
 use std::{f64::consts::PI, time::{Duration, Instant}};
 
 pub struct PidKontrolcu
@@ -42,22 +42,41 @@ const HEDEF_TOLERANS: f64 = 2.5;
 const MANUEL_OLU_BOLGE: f32 = 0.02;
 const MANUEL_KOMUT_ZAMAN_ASIMI: Duration = Duration::from_millis(500);
 
-// Fiziksel motor sırası:
-// M1 = iskeleon   = sola yatay
-// M2 = iskelearka = ileri-1
-// M3 = sancakon   = sağa yatay
-// M4 = sancakarka = ileri-2
+// Varsayılan fiziksel motor sırası:
+// M1 = sola yatay, M2 = ileri-1, M3 = sağa yatay, M4 = ileri-2
+// Bu sıra artık YKİ'den CMD:MAP:sol,ileri1,sag,ileri2 komutuyla değiştirilebilir.
 //
-// YKİ'den gelen manuel paket:
-// CMD:MAN:ileri,yatay
+// Manuel paket: CMD:MAN:ileri,yatay
 // ileri: 0.0..1.0
 // yatay: -1.0..1.0  (eksi=sol, artı=sağ)
-fn manuel_motor_karistir(ileri_girdisi: f32, yatay_girdisi: f32) -> MotorVeri
+fn motor_kanalina_yaz(motor: &mut MotorVeri, kanal: u8, deger: u16)
+{
+    match kanal
+    {
+        1 => motor.iskeleon = deger,
+        2 => motor.iskelearka = deger,
+        3 => motor.sancakon = deger,
+        4 => motor.sancakarka = deger,
+        _ => {}
+    }
+}
+
+fn manuel_motor_karistir(
+    ileri_girdisi: f32,
+    yatay_girdisi: f32,
+    esleme: MotorEsleme,
+) -> MotorVeri
 {
     let ileri = ileri_girdisi.clamp(0.0, 1.0);
     let yatay = yatay_girdisi.clamp(-1.0, 1.0);
     let mut motor = MotorVeri::default();
 
+    if !esleme.gecerli()
+    {
+        return motor;
+    }
+
+    // Gaz/ileri ve yatay komutu ölü bölgede ise açı ne olursa olsun bütün kanallar sıfırdır.
     if ileri <= MANUEL_OLU_BOLGE && yatay.abs() <= MANUEL_OLU_BOLGE
     {
         return motor;
@@ -81,17 +100,17 @@ fn manuel_motor_karistir(ileri_girdisi: f32, yatay_girdisi: f32) -> MotorVeri
         0
     };
 
-    // İki ileri motor her zaman aynı komutu alır.
-    motor.iskelearka = ileri_komutu; // M2
-    motor.sancakarka = ileri_komutu; // M4
+    // İki ileri motor kesinlikle aynı değişkenden beslenir.
+    motor_kanalina_yaz(&mut motor, esleme.ileri1, ileri_komutu);
+    motor_kanalina_yaz(&mut motor, esleme.ileri2, ileri_komutu);
 
     if yatay < -MANUEL_OLU_BOLGE
     {
-        motor.iskeleon = yatay_komutu; // M1: sola yatay
+        motor_kanalina_yaz(&mut motor, esleme.sol, yatay_komutu);
     }
     else if yatay > MANUEL_OLU_BOLGE
     {
-        motor.sancakon = yatay_komutu; // M3: sağa yatay
+        motor_kanalina_yaz(&mut motor, esleme.sag, yatay_komutu);
     }
 
     motor
@@ -246,6 +265,14 @@ pub async fn nav_task(
     let mut son_manuel_komut_zamani = Instant::now();
     let mut manuel_komut_alindi = false;
     let mut manuel_zaman_asimi_bildirildi = false;
+    let mut motor_esleme = MotorEsleme::default();
+    println!(
+        "Motor eşlemesi başlangıç: sol=M{}, ileri=M{}+M{}, sağ=M{}",
+        motor_esleme.sol,
+        motor_esleme.ileri1,
+        motor_esleme.ileri2,
+        motor_esleme.sag,
+    );
     loop
     {
         tick.tick().await;
@@ -301,6 +328,23 @@ pub async fn nav_task(
                     manuel_komut_alindi = true;
                     manuel_zaman_asimi_bildirildi = false;
                 }
+                GelenTelemetri::MotorEslemeDegistir(yeni_esleme) =>
+                {
+                    if yeni_esleme.gecerli()
+                    {
+                        motor_esleme = yeni_esleme;
+                        son_manuel_ileri = 0.0;
+                        son_manuel_yatay = 0.0;
+                        manuel_komut_alindi = false;
+                        println!(
+                            "Motor eşlemesi güncellendi: sol=M{}, ileri=M{}+M{}, sağ=M{}",
+                            motor_esleme.sol,
+                            motor_esleme.ileri1,
+                            motor_esleme.ileri2,
+                            motor_esleme.sag,
+                        );
+                    }
+                }
                 GelenTelemetri::RotaBelirle(noktalar) =>
                 {
                     nav.set_rota(noktalar);
@@ -326,6 +370,7 @@ pub async fn nav_task(
                 motor_istek = manuel_motor_karistir(
                     son_manuel_ileri,
                     son_manuel_yatay,
+                    motor_esleme,
                 );
             }
             else
@@ -386,32 +431,38 @@ pub async fn nav_task(
                         {
                             if hata < 0.0
                             {
-                                motor_istek.sancakon = 400; // M3: sağa yatay
+                                motor_kanalina_yaz(&mut motor_istek, motor_esleme.sag, 400);
                             }
                             else
                             {
-                                motor_istek.iskeleon = 400; // M1: sola yatay
+                                motor_kanalina_yaz(&mut motor_istek, motor_esleme.sol, 400);
                             }
                         }
                         else
                         {
                             let duzeltme = if hata.abs() < IHMALACI { 0.0 } else { donus_gucu };
 
-                            // İleri motorları daima eşit tutulur.
+                            // YKİ'den seçilmiş iki ileri motor daima aynı komutu alır.
                             let ileri_komutu = base_hiz.clamp(0.0, 1000.0) as u16;
-                            motor_istek.iskelearka = ileri_komutu; // M2
-                            motor_istek.sancakarka = ileri_komutu; // M4
+                            motor_kanalina_yaz(&mut motor_istek, motor_esleme.ileri1, ileri_komutu);
+                            motor_kanalina_yaz(&mut motor_istek, motor_esleme.ileri2, ileri_komutu);
 
-                            // Yön düzeltmesi yalnız yatay motorlarla yapılır.
+                            // Yön düzeltmesi seçilmiş yatay motorlarla yapılır.
                             if duzeltme > 0.0
                             {
-                                motor_istek.iskeleon =
-                                    duzeltme.clamp(0.0, 1000.0) as u16; // M1: sol
+                                motor_kanalina_yaz(
+                                    &mut motor_istek,
+                                    motor_esleme.sol,
+                                    duzeltme.clamp(0.0, 1000.0) as u16,
+                                );
                             }
                             else if duzeltme < 0.0
                             {
-                                motor_istek.sancakon =
-                                    (-duzeltme).clamp(0.0, 1000.0) as u16; // M3: sağ
+                                motor_kanalina_yaz(
+                                    &mut motor_istek,
+                                    motor_esleme.sag,
+                                    (-duzeltme).clamp(0.0, 1000.0) as u16,
+                                );
                             }
                         }
                     }
