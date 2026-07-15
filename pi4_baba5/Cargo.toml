@@ -1,0 +1,9 @@
+[package]
+name = "pi4_baba"
+version = "0.1.0"
+edition = "2024"
+default-run = "pi4_baba"
+
+[dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-serial = "5.5.0"
