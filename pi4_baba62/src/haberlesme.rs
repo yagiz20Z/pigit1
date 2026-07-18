@@ -1,38 +1,56 @@
-mod sensorler;
-mod motorlar;
-mod veri_tipleri;
-mod beyin;
-mod telemetri;
-
 use std::env;
+
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 use crate::motorlar::MotorKontrol;
+use crate::sensorler;
+use crate::telemetri;
 use crate::veri_tipleri::{
     GelenTelemetri, GidenTelemetri, GpsVeri, ImuVeri, MotorVeri,
 };
 
-// tüm portları burada belirttim sözkonusu SoH pi'sinde "portizleme" komutut ile portları buradan değiştirebilirsiniz
+// Donanım portları bu modülde tutulur. İstenirse ortam değişkenleriyle
+// değiştirilir: IDA_TEL_PORT, IDA_MOTOR_PORT, IDA_GPS_PORT, IDA_IMU_PORT.
 const DEFAULT_TEL_PORT: &str = "/dev/ttyUSB0";
 const DEFAULT_MOTOR_PORT: &str = "/dev/ttyUSB1";
-const DEFAULT_GPS_PORT: &str = "/dev/ttyACM1";
-const DEFAULT_IMU_PORT: &str = "/dev/ttyACM0";
-// 
+const DEFAULT_GPS_PORT: &str = "/dev/ttyACM0";
+const DEFAULT_IMU_PORT: &str = "/dev/ttyACM1";
+
 const TEL_BAUD_RATE: u32 = 57_600;
 const MOTOR_BAUD_RATE: u32 = 115_200;
 const GPS_BAUD_RATE: u32 = 115_200;
 const IMU_BAUD_RATE: u32 = 115_200;
 
+const TEL_CHANNEL_BUF: usize = 100;
+const MOTOR_CHANNEL_BUF: usize = 100;
+
 fn port_oku(env_adi: &str, varsayilan: &str) -> String {
     env::var(env_adi).unwrap_or_else(|_| varsayilan.to_string())
 }
 
-#[tokio::main]
-async fn main() {
-    const TEL_CHANNEL_BUF: usize = 100;
-    const MOTOR_CHANNEL_BUF: usize = 100;
-// burada bağlantıların sağlanıp sağlanmadığını gösteriyor
+/// Beynin yalnızca ihtiyaç duyduğu veri kanalları.
+/// Beyin port, baudrate veya UART ayrıntılarını bilmez.
+pub struct BeyinKanallari {
+    pub imu_rx: watch::Receiver<ImuVeri>,
+    pub gps_rx: watch::Receiver<GpsVeri>,
+    pub motor_tx: mpsc::Sender<MotorVeri>,
+    pub yki_komut_rx: mpsc::Receiver<GelenTelemetri>,
+    pub yki_telemetri_tx: mpsc::Sender<GidenTelemetri>,
+}
+
+/// main.rs'nin izlediği haberleşme görevleri.
+pub struct HaberlesmeGorevleri {
+    pub gps: JoinHandle<()>,
+    pub imu: JoinHandle<()>,
+    pub motor: JoinHandle<()>,
+    pub telemetri: JoinHandle<()>,
+}
+
+/// GPS, IMU, YKİ telemetrisi ve STM motor UART katmanını başlatır.
+/// Karar üretmez; yalnızca veriyi taşır ve bağlantıları yeniden kurar.
+pub fn baslat() -> (BeyinKanallari, HaberlesmeGorevleri) {
     let tel_port = port_oku("IDA_TEL_PORT", DEFAULT_TEL_PORT);
     let motor_port = port_oku("IDA_MOTOR_PORT", DEFAULT_MOTOR_PORT);
     let gps_port = port_oku("IDA_GPS_PORT", DEFAULT_GPS_PORT);
@@ -53,15 +71,15 @@ async fn main() {
     let (gps_tx, gps_rx) = watch::channel(GpsVeri::default());
     let (motor_tx, mut motor_rx) = mpsc::channel::<MotorVeri>(MOTOR_CHANNEL_BUF);
 
-    let gps_handle = tokio::spawn(async move {
+    let gps = tokio::spawn(async move {
         sensorler::m8n::gps_task(gps_port, GPS_BAUD_RATE, gps_tx).await;
     });
 
-    let imu_handle = tokio::spawn(async move {
+    let imu = tokio::spawn(async move {
         sensorler::bno085::imu_task(imu_port, IMU_BAUD_RATE, imu_tx).await;
     });
 
-    let motor_handle = tokio::spawn(async move {
+    let motor = tokio::spawn(async move {
         loop {
             println!("STM UART açılmaya çalışılıyor: {}", motor_port);
 
@@ -103,7 +121,7 @@ async fn main() {
         }
     });
 
-    let telemetri_handle = tokio::spawn(async move {
+    let telemetri = tokio::spawn(async move {
         if let Err(e) = telemetri::telemetri_task(
             tel_port,
             TEL_BAUD_RATE,
@@ -116,37 +134,19 @@ async fn main() {
         }
     });
 
-    let nav_handle = tokio::spawn(async move {
-        beyin::nav_task(
+    (
+        BeyinKanallari {
             imu_rx,
             gps_rx,
             motor_tx,
-            tel_to_beyin_rx,
-            beyin_to_tel_tx,
-        )
-        .await;
-    });
-
-    tokio::select! {
-        sonuc = nav_handle => {
-            eprintln!("nav_task sonlandı: {:?}", sonuc);
-        }
-        sonuc = motor_handle => {
-            eprintln!("Motor görevi sonlandı: {:?}", sonuc);
-        }
-        sonuc = gps_handle => {
-            eprintln!("GPS görevi sonlandı: {:?}", sonuc);
-        }
-        sonuc = imu_handle => {
-            eprintln!("IMU görevi sonlandı: {:?}", sonuc);
-        }
-        sonuc = telemetri_handle => {
-            eprintln!("Telemetri görevi sonlandı: {:?}", sonuc);
-        }
-        sonuc = tokio::signal::ctrl_c() => {
-            println!("Ctrl+C alındı: {:?}", sonuc);
-        }
-    }
-
-    println!("Sistem kapanıyor.");
+            yki_komut_rx: tel_to_beyin_rx,
+            yki_telemetri_tx: beyin_to_tel_tx,
+        },
+        HaberlesmeGorevleri {
+            gps,
+            imu,
+            motor,
+            telemetri,
+        },
+    )
 }
