@@ -219,6 +219,39 @@ pub async fn telemetri_task(
                                 if tx_yki.send(komut).await.is_err() {
                                     return Ok(());
                                 }
+                            } else if matches!(
+                                &komut,
+                                GelenTelemetri::ModDegistir(AracMod::Manuel)
+                            ) {
+                                // STOP, heartbeat yokken de kabul edildiği için eski kodda şu
+                                // kilit oluşabiliyordu: araç AcilDurum'a giriyor fakat MOD:0,
+                                // PING gelmeden reddedildiği için kullanıcı acilden çıkamıyordu.
+                                // MOD:0 motor hareketi üretmez; yalnızca güvenli manuel moda
+                                // geçiş isteğidir. Bu nedenle geçerli checksum'lu MOD:0 komutu
+                                // oturumu yeniden kurabilir. Ardından MAN komutları normal akıştan
+                                // geçer; PING gelmezse 4 saniyelik watchdog yine bağlantıyı keser.
+                                son_ping = Some(Instant::now());
+
+                                if !bu_oturum_bagli {
+                                    if !baglanti_durumu_gonder(
+                                        &tx_yki,
+                                        GelenTelemetri::TelemetriBaglandi,
+                                    )
+                                    .await
+                                    {
+                                        return Ok(());
+                                    }
+
+                                    kopuk_bildirildi = false;
+                                    bu_oturum_bagli = true;
+                                    println!(
+                                        "Acil durumdan çıkış: CMD:MOD:0 ile telemetri oturumu yeniden kuruldu."
+                                    );
+                                }
+
+                                if tx_yki.send(komut).await.is_err() {
+                                    return Ok(());
+                                }
                             } else if bu_oturum_bagli {
                                 if tx_yki.send(komut).await.is_err() {
                                     return Ok(());
