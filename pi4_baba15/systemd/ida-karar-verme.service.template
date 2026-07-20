@@ -1,0 +1,33 @@
+[Unit]
+Description=IDA Raspberry Pi Karar Verme Modulu
+Documentation=file://__IDA_WORKDIR__/AUTOSTART_KURULUM.md
+After=local-fs.target systemd-udevd.service
+Wants=systemd-udevd.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__IDA_USER__
+Group=__IDA_GROUP__
+__IDA_SUPPLEMENTARY_GROUPS__
+WorkingDirectory=__IDA_WORKDIR__
+Environment=HOME=__IDA_HOME__
+EnvironmentFile=-__IDA_ENVFILE__
+ExecStart=__IDA_BINARY__
+
+# Program hangi nedenle kapanırsa kapansın tekrar başlat.
+Restart=always
+RestartSec=2s
+
+# Rust kodundaki Ctrl+C güvenli kapanış yolunu çalıştırır:
+# motorları sıfırlar ve SD kayıt tamponlarını kapatır.
+KillSignal=SIGINT
+TimeoutStopSec=8s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ida-karar-verme
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
