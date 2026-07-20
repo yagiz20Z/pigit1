@@ -1,0 +1,53 @@
+// MainWindow alanlarına ekle:
+private readonly Arayuz.Telemetri.DualTrackState _dualTrack = new();
+
+// Telemetri satırının geldiği mevcut metoda ekle:
+private void TelemetriSatiriGeldi(string line)
+{
+    if (!_dualTrack.ProcessTelemetryLine(line))
+        return;
+
+    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+    {
+        var nav = _dualTrack.LastNavigation;
+        var dr = _dualTrack.LastDeadReckoning;
+
+        // Mevcut harita kütüphanendeki iki ayrı polyline'ı güncelle.
+        // GPS: düz çizgi; DR: kesikli çizgi olarak göster.
+        UpdateGpsPolyline(_dualTrack.GpsTrail);
+        UpdateEstimatedPolyline(_dualTrack.EstimatedTrail);
+
+        // Açı göstergesinde sıfır, DR başlatıldığı andaki araç yönüdür.
+        RelativeYawText.Text = $"Dönüş: {dr.RelativeYawDeg:+0.0;-0.0;0.0}°";
+        AbsoluteYawText.Text = $"Yaw: {dr.AbsoluteYawDeg:0.0}°";
+        DrErrorText.Text = $"GPS–tahmin farkı: {dr.GpsDifferenceM:0.0} m";
+        DrSpeedText.Text = $"Tahmini hız: {dr.ForwardSpeedMps:0.00} m/s";
+
+        // Tekne ikonunu mevcut mutlak yaw ile çevir.
+        RotateVehicleIcon(dr.AbsoluteYawDeg);
+    });
+}
+
+// "Tahmini izi sıfırla" butonunda çağır:
+private void ResetDeadReckoning_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+{
+    _dualTrack.ClearTrails();
+    string packet = Arayuz.Telemetri.IdaTelemetryProtocol.BuildDeadReckoningResetCommand();
+
+    // Arayüzündeki mevcut telemetri/serial gönderme metodunu kullan.
+    SendRawTelemetry(packet);
+}
+
+// Aşağıdaki dört metodu kullandığın harita bileşenine göre bağla:
+// void UpdateGpsPolyline(IReadOnlyList<GeoTrackPoint> points)
+// void UpdateEstimatedPolyline(IReadOnlyList<GeoTrackPoint> points)
+// void RotateVehicleIcon(double absoluteYawDeg)
+// void SendRawTelemetry(string packet)
+
+// XAML'e eklenebilecek merkez yönlü gösterge örneği:
+// xmlns:tel="clr-namespace:Arayuz.Telemetri"
+// <tel:RelativeHeadingGauge x:Name="HeadingGauge" Width="150" Height="150" />
+//
+// TelemetriSatiriGeldi içindeki UI güncellemesine ekle:
+// HeadingGauge.RelativeYaw = dr.RelativeYawDeg;
+// HeadingGauge.AbsoluteYaw = dr.AbsoluteYawDeg;
