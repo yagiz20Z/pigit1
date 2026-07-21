@@ -1,0 +1,1377 @@
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/DEAD_RECKONING_CIFT_IZ.md /mnt/data/work_gps_dr/pi4_baba6211/DEAD_RECKONING_CIFT_IZ.md
+--- /mnt/data/dr_baseline/pi4_baba6211/DEAD_RECKONING_CIFT_IZ.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/DEAD_RECKONING_CIFT_IZ.md	2026-07-18 18:16:08.242160056 +0000
+@@ -0,0 +1,69 @@
++# GPS yanında PWM + IMU tahmini rota
++
++## Çalışma mantığı
++
++1. İlk güvenilir GPS fix ve taze IMU yaw geldiğinde tahmini rota başlatılır.
++2. O anki GPS koordinatı tahmini rotanın başlangıç noktası olur.
++3. O anki IMU yaw değeri `0° göreli açı` kabul edilir.
++4. İki ileri motorun PWM ortalaması yaklaşık ileri hıza çevrilir.
++5. Sağ ve sol yatay motorların PWM farkı yaklaşık yanal hıza çevrilir.
++6. Gövde hızları IMU yaw kullanılarak kuzey/doğu hareketine dönüştürülür.
++7. Tahmini konum GPS'e düzeltilmeden bağımsız ilerler.
++8. Gerçek GPS ve tahmini konum arasındaki fark metre olarak hesaplanır.
++
++Bu yöntem gerçek odometri değildir. Akıntı, rüzgâr, batarya gerilimi, motor verimi,
++yük ve gövde sürüklemesi nedeniyle zamanla drift oluşur. Zaten ikinci izin amacı
++bu farkı görünür kılmak ve motor-hız kalibrasyonu yapabilmektir.
++
++## Kalibrasyon
++
++Başlangıç değerleri:
++
++```bash
++export IDA_DR_MAX_FORWARD_MPS=2.0
++export IDA_DR_MAX_LATERAL_MPS=0.45
++export IDA_DR_PWM_DEADZONE=0.03
++```
++
++- `IDA_DR_MAX_FORWARD_MPS`: iki ileri motor 1000 iken yaklaşık hız.
++- `IDA_DR_MAX_LATERAL_MPS`: sağ/sol yatay motor 1000 iken yaklaşık yanal hız.
++- `IDA_DR_PWM_DEADZONE`: hareket üretmeyen normalize PWM oranı.
++
++Kalibrasyon için düz hatta sabit PWM ile 10-20 saniye gidin. GPS mesafesini süreye
++bölerek gerçek hızı bulun ve `IDA_DR_MAX_FORWARD_MPS` değerini güncelleyin.
++
++## Telemetri
++
++Yeni üçüncü telemetri satırı:
++
++```text
++DR:lat,lon,yaw,goreli_yaw,referans_yaw,ileri_mps,yatay_mps,mesafe_m,gps_fark_m,aktif*CS
++```
++
++Örnek:
++
++```text
++DR:41.0000102,29.0000043,87.20,12.20,75.00,0.800,0.000,8.45,1.32,1*AB
++```
++
++## Yeniden merkezleme
++
++Arayüz şu payload'ı normal telemetri checksum sistemiyle yollar:
++
++```text
++CMD:DR:RESET*61\n
++```
++
++Checksum hesaplanmadan önceki payload `CMD:DR:RESET` değeridir.
++
++Komut geldiğinde ilk taze/geçerli GPS+IMU çifti yeni başlangıç olur. GPS izi silinmek
++zorunda değildir; arayüz isterse yalnız tahmini izi temizleyebilir.
++
++## Test görüntüleyicisi
++
++```bash
++python3 -m pip install --user pyserial matplotlib
++python3 dr_dual_track_viewer.py /dev/ttyUSB0 57600
++```
++
++Düz çizgi GPS, kesikli çizgi PWM+IMU tahminidir.
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/README.md /mnt/data/work_gps_dr/pi4_baba6211/README.md
+--- /mnt/data/dr_baseline/pi4_baba6211/README.md	2026-07-18 17:44:31.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/README.md	2026-07-18 18:17:45.030556582 +0000
+@@ -69,11 +69,13 @@
+     CMD:ROTA:41.025643,28.974132;41.026021,28.975015;37.792254,29.057634...*<CHECKSUM>
+ 
+ # TELEMETRI IDA dan YKI ye
+-IDA yki ye surekli 2 paket gonderecek. Bu paketler;
++IDA YKI ye surekli 3 paket gonderecek. Bu paketler;
+     NAV:41.025612,28.974134,1.50,2.00,2.1,-1.5,45.5,45.0,1*5A
+     MOT:0,400,0,400,0,400,0,400*3B
++    DR:41.0256120,28.9741340,45.50,0.00,45.50,0.800,0.000,1.20,0.35,1*<CHECKSUM>
+     NAV:41.025615,28.974137,1.52,2.00,2.0,-1.4,45.2,45.0,1*6C
+     MOT:0,400,0,400,0,400,0,400*3B
++    DR:41.0256130,28.9741350,45.20,-0.30,45.50,0.800,0.000,1.28,0.42,1*<CHECKSUM>
+     ...
+ seklinde olacak. NMEA yani string formatinda olacak. parse edilmesi gerekecek.
+ 
+@@ -81,6 +83,8 @@
+     NAV:<enlem>,<boylam>,<gercek_hiz>,<hedef_hiz>,<roll>,<pitch>,<yaw>,<hedef_yaw>,<mod_id>*<CHECKSUM>\n
+ MOT paketi icin veri siralamasi;
+     MOT:<gercek_IskeleOn>,<gercek_IskeleArka>,<gercek_SancakOn>,<gercek_SancakArka>,<istek_IskeleOn>,<istek_IskeleArka>,<istek_SancakOn>,<istek_SancakArka>*<CHECKSUM>\n
++DR paketi icin veri siralamasi;
++    DR:<tahmini_enlem>,<tahmini_boylam>,<mutlak_yaw>,<merkeze_gore_yaw>,<referans_yaw>,<ileri_hiz_mps>,<yatay_hiz_mps>,<toplam_mesafe_m>,<gps_fark_m>,<aktif>*<CHECKSUM>\n
+     
+ 
+ # ACIL
+@@ -142,3 +146,21 @@
+ export IDA_GPS_BAUD=115200
+ cargo run --release --bin pi4_baba
+ ```
++
++## GPS + PWM/IMU çift iz (dead reckoning)
++
++Bu sürümde gerçek GPS izine ek olarak motor PWM komutları ve BNO085 yaw açısı ile
++bağımsız bir tahmini konum hesaplanır. Tahmini iz ilk geçerli GPS+IMU anında otomatik
++başlatılır ve `DR:` telemetri satırıyla YKİ'ye gönderilir.
++
++Ayarlar:
++
++```bash
++export IDA_DR_MAX_FORWARD_MPS=2.0
++export IDA_DR_MAX_LATERAL_MPS=0.45
++export IDA_DR_PWM_DEADZONE=0.03
++```
++
++Tahmini izi o anki GPS konumu ve IMU açısına yeniden merkezlemek için YKİ checksum'lu
++`CMD:DR:RESET` komutunu gönderebilir. Arayüz tarafı için `arayuz_entegrasyon/`
++klasörüne bakın. Ayrıntılar `DEAD_RECKONING_CIFT_IZ.md` dosyasındadır.
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/TEST_SONUCU_DR.md /mnt/data/work_gps_dr/pi4_baba6211/TEST_SONUCU_DR.md
+--- /mnt/data/dr_baseline/pi4_baba6211/TEST_SONUCU_DR.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/TEST_SONUCU_DR.md	2026-07-18 18:17:55.368073834 +0000
+@@ -0,0 +1,16 @@
++# PWM + IMU çift iz doğrulaması
++
++Bu çalışma ortamında `cargo`, `rustc` ve `dotnet` kurulu olmadığı için gerçek Rust ve
++Avalonia derlemesi çalıştırılamadı.
++
++Yapılan kontroller:
++
++- `gps_usb_test.py` ve `dr_dual_track_viewer.py` Python sözdizimi doğrulandı.
++- `NAV` ve yeni `DR` alan sayıları/checksum üretimi örnek paketlerle doğrulandı.
++- `CMD:DR:RESET` tam satır checksum değerinin `61` olduğu doğrulandı.
++- Rust ve C# kaynaklarında parantez/köşeli parantez/süslü parantez bütünlüğü kontrol edildi.
++- `GidenTelemetri -> DR satırı -> seri yazım` bağlantı noktaları statik olarak kontrol edildi.
++- ZIP oluşturulduktan sonra arşiv bütünlük testi yapılmalıdır.
++
++Araç üstündeki ilk testte motor-hız katsayıları mutlaka kalibre edilmelidir. PWM'den
++hesaplanan konum fiziksel geri besleme olmadığı için zamanla gerçek GPS izinden sapar.
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/ARAYUZE_EKLEME.md /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/ARAYUZE_EKLEME.md
+--- /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/ARAYUZE_EKLEME.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/ARAYUZE_EKLEME.md	2026-07-18 18:16:08.242455702 +0000
+@@ -0,0 +1,89 @@
++# Avalonia çift iz entegrasyonu
++
++## Önemli entegrasyon notu
++
++Bu pakette kullanıcının gerçek Avalonia arayüz projesi bulunmadığı için harita
++kütüphanesinin somut `Polyline` nesnelerine doğrudan bağlanan satırlar otomatik
++yamalanamadı. Aşağıdaki sınıflar telemetriyi hazırlar ve iki iz listesini üretir;
++`UpdateGpsPolyline` ile `UpdateEstimatedPolyline` metotları mevcut harita
++bileşenindeki gerçek katmanlara bağlanmalıdır.
++
++# Arayüz: GPS ve PWM/IMU tahmini izi birlikte gösterme
++
++Pi artık her telemetri çevriminde üç satır gönderir:
++
++- `NAV:` gerçek GPS izi
++- `MOT:` motor komutları
++- `DR:` PWM + IMU tabanlı bağımsız tahmini iz
++
++## DR paketi
++
++```text
++DR:enlem,boylam,mutlak_yaw,goreli_yaw,referans_yaw,ileri_hiz,yatay_hiz,toplam_mesafe,gps_fark,aktif*CS
++```
++
++Örnek:
++
++```text
++DR:41.0123456,29.0123456,82.40,17.20,65.20,0.800,-0.040,12.50,1.80,1*CS
++```
++
++- `mutlak_yaw`: IMU'nun dünya yönü; haritadaki tekne ikonunu döndürmek için.
++- `goreli_yaw`: tahmini iz başlatıldığı andaki yön `0°` kabul edilerek dönüş miktarı.
++- `referans_yaw`: merkez kabul edilen ilk açı.
++- `gps_fark`: gerçek GPS noktası ile PWM/IMU tahmini arasındaki mesafe.
++- `aktif=0`: henüz geçerli GPS+IMU ile merkez kurulmadı.
++
++`DeadReckoningProtocol.cs` dosyasını arayüz projesine ekle. Telemetri satırlarını
++`DualTrackState.ProcessTelemetryLine(...)` metoduna ver. Haritada iki farklı polyline tut:
++
++1. `GpsTrail`: gerçek GPS izi.
++2. `EstimatedTrail`: PWM/IMU tahmini izi.
++
++Tahmini izi yeniden merkezlemek için checksum'lu şu komutu gönder:
++
++```text
++CMD:DR:RESET
++```
++
++C# tarafında doğru checksum'lu tam satırı şu metod üretir:
++
++```csharp
++IdaTelemetryProtocol.BuildDeadReckoningResetCommand()
++```
++
++## Harita görünümü önerisi
++
++- GPS izi: düz çizgi.
++- Tahmini iz: kesikli çizgi.
++- GPS işaretçisi: normal konum simgesi.
++- Tahmini işaretçi: farklı simge ve `mutlak_yaw` kadar döndürülmüş ok.
++- Açı göstergesi: `goreli_yaw`; merkez çizgisi `0°`.
++- Sağlık bilgisi: `gps_fark` büyüdükçe tahmin drift ediyor demektir.
++
++`MainWindow_entegrasyon_ornegi.cs.txt`, mevcut Avalonia olay akışına eklenecek
++çağrıları gösterir. Harita kütüphanesinin adı bu pakette bulunmadığı için yalnız
++`UpdateGpsPolyline` ve `UpdateEstimatedPolyline` adaptörleri mevcut harita kontrolüne
++bağlanmalıdır.
++
++## Merkez yönlü açı göstergesi
++
++`RelativeHeadingGauge.cs` doğrudan Avalonia projesine eklenebilir. Gösterge içinde
++mavi çizgi DR sıfırlandığı andaki yönü, kırmızı çizgi ise bu merkeze göre güncel
++dönüşü gösterir.
++
++```xml
++xmlns:tel="clr-namespace:Arayuz.Telemetri"
++
++<tel:RelativeHeadingGauge
++    x:Name="HeadingGauge"
++    Width="150"
++    Height="150" />
++```
++
++DR paketi işlendiğinde:
++
++```csharp
++HeadingGauge.RelativeYaw = dr.RelativeYawDeg;
++HeadingGauge.AbsoluteYaw = dr.AbsoluteYawDeg;
++```
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/DeadReckoningProtocol.cs /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/DeadReckoningProtocol.cs
+--- /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/DeadReckoningProtocol.cs	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/DeadReckoningProtocol.cs	2026-07-18 18:11:51.864317901 +0000
+@@ -0,0 +1,251 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Linq;
++
++namespace Arayuz.Telemetri;
++
++public readonly record struct GeoTrackPoint(double Latitude, double Longitude, DateTime TimestampUtc);
++
++public readonly record struct NavigationFrame(
++    double Latitude,
++    double Longitude,
++    double GroundSpeedMps,
++    double SetpointSpeedMps,
++    double RollDeg,
++    double PitchDeg,
++    double YawDeg,
++    double SetpointYawDeg,
++    int VehicleMode);
++
++public readonly record struct DeadReckoningFrame(
++    double Latitude,
++    double Longitude,
++    double AbsoluteYawDeg,
++    double RelativeYawDeg,
++    double ReferenceYawDeg,
++    double ForwardSpeedMps,
++    double LateralSpeedMps,
++    double TotalDistanceM,
++    double GpsDifferenceM,
++    bool Active);
++
++public enum TelemetryFrameKind
++{
++    None,
++    Navigation,
++    DeadReckoning,
++    Motor
++}
++
++public static class IdaTelemetryProtocol
++{
++    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
++
++    public static TelemetryFrameKind ParseLine(
++        string line,
++        out NavigationFrame navigation,
++        out DeadReckoningFrame deadReckoning)
++    {
++        navigation = default;
++        deadReckoning = default;
++
++        if (!TryGetCheckedPayload(line, out string payload))
++            return TelemetryFrameKind.None;
++
++        if (payload.StartsWith("NAV:", StringComparison.Ordinal))
++        {
++            string[] values = payload[4..].Split(',');
++            if (values.Length != 9)
++                return TelemetryFrameKind.None;
++
++            if (!TryDouble(values[0], out double lat) ||
++                !TryDouble(values[1], out double lon) ||
++                !TryDouble(values[2], out double groundSpeed) ||
++                !TryDouble(values[3], out double setpointSpeed) ||
++                !TryDouble(values[4], out double roll) ||
++                !TryDouble(values[5], out double pitch) ||
++                !TryDouble(values[6], out double yaw) ||
++                !TryDouble(values[7], out double setpointYaw) ||
++                !int.TryParse(values[8], NumberStyles.Integer, Inv, out int mode))
++            {
++                return TelemetryFrameKind.None;
++            }
++
++            navigation = new NavigationFrame(
++                lat, lon, groundSpeed, setpointSpeed,
++                roll, pitch, yaw, setpointYaw, mode);
++            return TelemetryFrameKind.Navigation;
++        }
++
++        if (payload.StartsWith("DR:", StringComparison.Ordinal))
++        {
++            string[] values = payload[3..].Split(',');
++            if (values.Length != 10)
++                return TelemetryFrameKind.None;
++
++            if (!TryDouble(values[0], out double lat) ||
++                !TryDouble(values[1], out double lon) ||
++                !TryDouble(values[2], out double absoluteYaw) ||
++                !TryDouble(values[3], out double relativeYaw) ||
++                !TryDouble(values[4], out double referenceYaw) ||
++                !TryDouble(values[5], out double forwardSpeed) ||
++                !TryDouble(values[6], out double lateralSpeed) ||
++                !TryDouble(values[7], out double totalDistance) ||
++                !TryDouble(values[8], out double gpsDifference) ||
++                !int.TryParse(values[9], NumberStyles.Integer, Inv, out int active))
++            {
++                return TelemetryFrameKind.None;
++            }
++
++            deadReckoning = new DeadReckoningFrame(
++                lat, lon, absoluteYaw, relativeYaw, referenceYaw,
++                forwardSpeed, lateralSpeed, totalDistance, gpsDifference,
++                active != 0);
++            return TelemetryFrameKind.DeadReckoning;
++        }
++
++        return payload.StartsWith("MOT:", StringComparison.Ordinal)
++            ? TelemetryFrameKind.Motor
++            : TelemetryFrameKind.None;
++    }
++
++    public static string BuildCommand(string payload)
++    {
++        if (string.IsNullOrWhiteSpace(payload))
++            throw new ArgumentException("Komut boş olamaz.", nameof(payload));
++
++        string normalized = payload.Trim();
++        return $"{normalized}*{Checksum(normalized)}\n";
++    }
++
++    public static string BuildDeadReckoningResetCommand() =>
++        BuildCommand("CMD:DR:RESET");
++
++    private static bool TryGetCheckedPayload(string line, out string payload)
++    {
++        payload = string.Empty;
++        if (string.IsNullOrWhiteSpace(line))
++            return false;
++
++        string clean = line.Trim();
++        int star = clean.LastIndexOf('*');
++        if (star <= 0 || star == clean.Length - 1)
++            return false;
++
++        string candidate = clean[..star];
++        string received = clean[(star + 1)..].Trim();
++        if (!Checksum(candidate).Equals(received, StringComparison.OrdinalIgnoreCase))
++            return false;
++
++        payload = candidate;
++        return true;
++    }
++
++    private static string Checksum(string payload)
++    {
++        int sum = payload.Sum(ch => (int)(byte)ch);
++        return (sum & 0xFF).ToString("X2", Inv);
++    }
++
++    private static bool TryDouble(string value, out double result) =>
++        double.TryParse(value, NumberStyles.Float, Inv, out result) &&
++        double.IsFinite(result);
++}
++
++public sealed class DualTrackState
++{
++    private readonly object _sync = new();
++    private readonly List<GeoTrackPoint> _gpsTrail = new();
++    private readonly List<GeoTrackPoint> _estimatedTrail = new();
++
++    public int MaximumPointCount { get; set; } = 6000;
++    public double MinimumPointDistanceM { get; set; } = 0.05;
++
++    public NavigationFrame LastNavigation { get; private set; }
++    public DeadReckoningFrame LastDeadReckoning { get; private set; }
++
++    public IReadOnlyList<GeoTrackPoint> GpsTrail
++    {
++        get { lock (_sync) return _gpsTrail.ToArray(); }
++    }
++
++    public IReadOnlyList<GeoTrackPoint> EstimatedTrail
++    {
++        get { lock (_sync) return _estimatedTrail.ToArray(); }
++    }
++
++    public bool ProcessTelemetryLine(string line)
++    {
++        TelemetryFrameKind kind = IdaTelemetryProtocol.ParseLine(
++            line, out NavigationFrame nav, out DeadReckoningFrame dr);
++
++        lock (_sync)
++        {
++            switch (kind)
++            {
++                case TelemetryFrameKind.Navigation:
++                    LastNavigation = nav;
++                    if (CoordinateValid(nav.Latitude, nav.Longitude))
++                    {
++                        AddPoint(_gpsTrail, nav.Latitude, nav.Longitude);
++                        return true;
++                    }
++                    break;
++
++                case TelemetryFrameKind.DeadReckoning:
++                    LastDeadReckoning = dr;
++                    if (dr.Active && CoordinateValid(dr.Latitude, dr.Longitude))
++                    {
++                        AddPoint(_estimatedTrail, dr.Latitude, dr.Longitude);
++                        return true;
++                    }
++                    break;
++            }
++        }
++
++        return false;
++    }
++
++    public void ClearTrails()
++    {
++        lock (_sync)
++        {
++            _gpsTrail.Clear();
++            _estimatedTrail.Clear();
++        }
++    }
++
++    private void AddPoint(List<GeoTrackPoint> trail, double latitude, double longitude)
++    {
++        var point = new GeoTrackPoint(latitude, longitude, DateTime.UtcNow);
++        if (trail.Count > 0)
++        {
++            GeoTrackPoint previous = trail[^1];
++            if (DistanceM(previous.Latitude, previous.Longitude, latitude, longitude) <
++                MinimumPointDistanceM)
++            {
++                return;
++            }
++        }
++
++        trail.Add(point);
++        int overflow = trail.Count - Math.Max(100, MaximumPointCount);
++        if (overflow > 0)
++            trail.RemoveRange(0, overflow);
++    }
++
++    private static bool CoordinateValid(double latitude, double longitude) =>
++        double.IsFinite(latitude) && double.IsFinite(longitude) &&
++        latitude is >= -90.0 and <= 90.0 &&
++        longitude is >= -180.0 and <= 180.0 &&
++        !(latitude == 0.0 && longitude == 0.0);
++
++    private static double DistanceM(double lat1, double lon1, double lat2, double lon2)
++    {
++        double meanLatitudeRad = ((lat1 + lat2) * 0.5) * Math.PI / 180.0;
++        double north = (lat2 - lat1) * 111_320.0;
++        double east = (lon2 - lon1) * 111_320.0 * Math.Cos(meanLatitudeRad);
++        return Math.Sqrt(north * north + east * east);
++    }
++}
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/MainWindow_entegrasyon_ornegi.cs.txt /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/MainWindow_entegrasyon_ornegi.cs.txt
+--- /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/MainWindow_entegrasyon_ornegi.cs.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/MainWindow_entegrasyon_ornegi.cs.txt	2026-07-18 18:15:33.036131674 +0000
+@@ -0,0 +1,53 @@
++// MainWindow alanlarına ekle:
++private readonly Arayuz.Telemetri.DualTrackState _dualTrack = new();
++
++// Telemetri satırının geldiği mevcut metoda ekle:
++private void TelemetriSatiriGeldi(string line)
++{
++    if (!_dualTrack.ProcessTelemetryLine(line))
++        return;
++
++    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
++    {
++        var nav = _dualTrack.LastNavigation;
++        var dr = _dualTrack.LastDeadReckoning;
++
++        // Mevcut harita kütüphanendeki iki ayrı polyline'ı güncelle.
++        // GPS: düz çizgi; DR: kesikli çizgi olarak göster.
++        UpdateGpsPolyline(_dualTrack.GpsTrail);
++        UpdateEstimatedPolyline(_dualTrack.EstimatedTrail);
++
++        // Açı göstergesinde sıfır, DR başlatıldığı andaki araç yönüdür.
++        RelativeYawText.Text = $"Dönüş: {dr.RelativeYawDeg:+0.0;-0.0;0.0}°";
++        AbsoluteYawText.Text = $"Yaw: {dr.AbsoluteYawDeg:0.0}°";
++        DrErrorText.Text = $"GPS–tahmin farkı: {dr.GpsDifferenceM:0.0} m";
++        DrSpeedText.Text = $"Tahmini hız: {dr.ForwardSpeedMps:0.00} m/s";
++
++        // Tekne ikonunu mevcut mutlak yaw ile çevir.
++        RotateVehicleIcon(dr.AbsoluteYawDeg);
++    });
++}
++
++// "Tahmini izi sıfırla" butonunda çağır:
++private void ResetDeadReckoning_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
++{
++    _dualTrack.ClearTrails();
++    string packet = Arayuz.Telemetri.IdaTelemetryProtocol.BuildDeadReckoningResetCommand();
++
++    // Arayüzündeki mevcut telemetri/serial gönderme metodunu kullan.
++    SendRawTelemetry(packet);
++}
++
++// Aşağıdaki dört metodu kullandığın harita bileşenine göre bağla:
++// void UpdateGpsPolyline(IReadOnlyList<GeoTrackPoint> points)
++// void UpdateEstimatedPolyline(IReadOnlyList<GeoTrackPoint> points)
++// void RotateVehicleIcon(double absoluteYawDeg)
++// void SendRawTelemetry(string packet)
++
++// XAML'e eklenebilecek merkez yönlü gösterge örneği:
++// xmlns:tel="clr-namespace:Arayuz.Telemetri"
++// <tel:RelativeHeadingGauge x:Name="HeadingGauge" Width="150" Height="150" />
++//
++// TelemetriSatiriGeldi içindeki UI güncellemesine ekle:
++// HeadingGauge.RelativeYaw = dr.RelativeYawDeg;
++// HeadingGauge.AbsoluteYaw = dr.AbsoluteYawDeg;
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/RelativeHeadingGauge.cs /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/RelativeHeadingGauge.cs
+--- /mnt/data/dr_baseline/pi4_baba6211/arayuz_entegrasyon/RelativeHeadingGauge.cs	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/arayuz_entegrasyon/RelativeHeadingGauge.cs	2026-07-18 18:15:33.028569110 +0000
+@@ -0,0 +1,95 @@
++using System;
++using Avalonia;
++using Avalonia.Controls;
++using Avalonia.Media;
++
++namespace Arayuz.Telemetri;
++
++/// <summary>
++/// DR sıfırlandığı andaki yönü üst/0° kabul eder ve aracın bu merkeze göre
++/// ne tarafa döndüğünü gösterir. Pozitif açı sağa, negatif açı sola dönüşür.
++/// </summary>
++public sealed class RelativeHeadingGauge : Control
++{
++    public static readonly StyledProperty<double> RelativeYawProperty =
++        AvaloniaProperty.Register<RelativeHeadingGauge, double>(nameof(RelativeYaw));
++
++    public static readonly StyledProperty<double> AbsoluteYawProperty =
++        AvaloniaProperty.Register<RelativeHeadingGauge, double>(nameof(AbsoluteYaw));
++
++    static RelativeHeadingGauge()
++    {
++        AffectsRender<RelativeHeadingGauge>(RelativeYawProperty, AbsoluteYawProperty);
++    }
++
++    public double RelativeYaw
++    {
++        get => GetValue(RelativeYawProperty);
++        set => SetValue(RelativeYawProperty, value);
++    }
++
++    public double AbsoluteYaw
++    {
++        get => GetValue(AbsoluteYawProperty);
++        set => SetValue(AbsoluteYawProperty, value);
++    }
++
++    public override void Render(DrawingContext context)
++    {
++        base.Render(context);
++
++        double size = Math.Min(Bounds.Width, Bounds.Height);
++        if (size < 24.0)
++            return;
++
++        Point center = Bounds.Center;
++        double radius = size * 0.42;
++        var rimPen = new Pen(Brushes.Gray, Math.Max(1.0, size * 0.012));
++        var tickPen = new Pen(Brushes.DimGray, Math.Max(1.0, size * 0.008));
++        var referencePen = new Pen(Brushes.DodgerBlue, Math.Max(2.0, size * 0.018));
++        var headingPen = new Pen(Brushes.OrangeRed, Math.Max(2.5, size * 0.024));
++
++        context.DrawEllipse(null, rimPen, center, radius, radius);
++
++        // Dört ana yön çizgisi. Üst çizgi, sıfırlama anındaki merkez yönüdür.
++        for (int deg = 0; deg < 360; deg += 45)
++        {
++            double rad = deg * Math.PI / 180.0;
++            double inner = radius * (deg % 90 == 0 ? 0.82 : 0.88);
++            Point p1 = new(
++                center.X + Math.Sin(rad) * inner,
++                center.Y - Math.Cos(rad) * inner);
++            Point p2 = new(
++                center.X + Math.Sin(rad) * radius,
++                center.Y - Math.Cos(rad) * radius);
++            context.DrawLine(tickPen, p1, p2);
++        }
++
++        // Başlangıç/referans yönü: daima göstergenin üstü.
++        context.DrawLine(
++            referencePen,
++            center,
++            new Point(center.X, center.Y - radius * 0.82));
++
++        double relative = NormalizeSigned(RelativeYaw);
++        double relativeRad = relative * Math.PI / 180.0;
++        Point tip = new(
++            center.X + Math.Sin(relativeRad) * radius * 0.76,
++            center.Y - Math.Cos(relativeRad) * radius * 0.76);
++        context.DrawLine(headingPen, center, tip);
++        context.DrawEllipse(Brushes.OrangeRed, null, center, size * 0.035, size * 0.035);
++    }
++
++    private static double NormalizeSigned(double degree)
++    {
++        if (!double.IsFinite(degree))
++            return 0.0;
++
++        degree %= 360.0;
++        if (degree > 180.0)
++            degree -= 360.0;
++        if (degree < -180.0)
++            degree += 360.0;
++        return degree;
++    }
++}
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/dr_dual_track_viewer.py /mnt/data/work_gps_dr/pi4_baba6211/dr_dual_track_viewer.py
+--- /mnt/data/dr_baseline/pi4_baba6211/dr_dual_track_viewer.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/dr_dual_track_viewer.py	2026-07-18 18:12:17.032071929 +0000
+@@ -0,0 +1,124 @@
++#!/usr/bin/env python3
++"""NAV ve DR telemetri satırlarını seri porttan okuyup iki ayrı iz halinde gösterir."""
++
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++from typing import Optional
++
++
++@dataclass
++class DrFrame:
++    lat: float
++    lon: float
++    yaw: float
++    relative_yaw: float
++    gps_error_m: float
++    active: bool
++
++
++def checksum(payload: str) -> str:
++    return f"{sum(payload.encode('ascii')) & 0xFF:02X}"
++
++
++def checked_payload(line: str) -> Optional[str]:
++    clean = line.strip()
++    if "*" not in clean:
++        return None
++    payload, received = clean.rsplit("*", 1)
++    return payload if checksum(payload).lower() == received.lower() else None
++
++
++def parse_nav(payload: str) -> Optional[tuple[float, float]]:
++    if not payload.startswith("NAV:"):
++        return None
++    values = payload[4:].split(",")
++    if len(values) != 9:
++        return None
++    lat, lon = float(values[0]), float(values[1])
++    if lat == 0.0 and lon == 0.0:
++        return None
++    return lat, lon
++
++
++def parse_dr(payload: str) -> Optional[DrFrame]:
++    if not payload.startswith("DR:"):
++        return None
++    values = payload[3:].split(",")
++    if len(values) != 10:
++        return None
++    return DrFrame(
++        lat=float(values[0]),
++        lon=float(values[1]),
++        yaw=float(values[2]),
++        relative_yaw=float(values[3]),
++        gps_error_m=float(values[8]),
++        active=values[9] == "1",
++    )
++
++
++def main() -> None:
++    try:
++        import matplotlib.pyplot as plt
++        import serial
++    except ImportError as exc:
++        raise SystemExit(
++            "Eksik paket. Kurulum: python3 -m pip install --user pyserial matplotlib"
++        ) from exc
++
++    parser = argparse.ArgumentParser()
++    parser.add_argument("port", help="Örnek: /dev/ttyUSB0")
++    parser.add_argument("baud", nargs="?", type=int, default=57600)
++    args = parser.parse_args()
++
++    gps_lat: list[float] = []
++    gps_lon: list[float] = []
++    dr_lat: list[float] = []
++    dr_lon: list[float] = []
++    last_dr: Optional[DrFrame] = None
++
++    plt.ion()
++    fig, ax = plt.subplots()
++    gps_line, = ax.plot([], [], "-", label="GPS izi")
++    dr_line, = ax.plot([], [], "--", label="PWM + IMU tahmini")
++    ax.set_xlabel("Boylam")
++    ax.set_ylabel("Enlem")
++    ax.legend()
++
++    with serial.Serial(args.port, args.baud, timeout=1) as port:
++        while plt.fignum_exists(fig.number):
++            raw = port.readline().decode("ascii", errors="ignore")
++            payload = checked_payload(raw)
++            if payload is None:
++                plt.pause(0.01)
++                continue
++
++            nav = parse_nav(payload)
++            if nav is not None:
++                gps_lat.append(nav[0])
++                gps_lon.append(nav[1])
++
++            dr = parse_dr(payload)
++            if dr is not None and dr.active:
++                last_dr = dr
++                dr_lat.append(dr.lat)
++                dr_lon.append(dr.lon)
++
++            gps_line.set_data(gps_lon, gps_lat)
++            dr_line.set_data(dr_lon, dr_lat)
++            ax.relim()
++            ax.autoscale_view()
++            ax.set_aspect("equal", adjustable="datalim")
++
++            if last_dr is not None:
++                ax.set_title(
++                    f"Yaw {last_dr.yaw:.1f}° | Merkeze göre "
++                    f"{last_dr.relative_yaw:+.1f}° | GPS farkı {last_dr.gps_error_m:.1f} m"
++                )
++            fig.canvas.draw_idle()
++            plt.pause(0.01)
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/src/beyin.rs /mnt/data/work_gps_dr/pi4_baba6211/src/beyin.rs
+--- /mnt/data/dr_baseline/pi4_baba6211/src/beyin.rs	2026-07-18 17:44:31.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/src/beyin.rs	2026-07-18 18:07:52.344251703 +0000
+@@ -1,3 +1,4 @@
++use crate::dead_reckoning::DeadReckoning;
+ use crate::veri_tipleri::{
+     AracMod, GelenTelemetri, GidenTelemetri, GpsVeri, ImuVeri, MotorEsleme, MotorVeri,
+ };
+@@ -254,6 +255,9 @@
+     let mut tick = interval(Duration::from_millis(50));
+     let mut last_time = Instant::now();
+     let mut nav = NavData::new();
++    let mut dead_reckoning = DeadReckoning::new();
++    let mut dr_reset_istendi = false;
++    let mut dr_bekleme_bildirildi = false;
+     let mut pid = PidKontrolcu::new(4.0, 0.1, 0.5, 150.0);
+     let base_hiz: f32 = 400.0;
+     let mut kaba_donus_modu = false;
+@@ -278,6 +282,13 @@
+         "Motor eşlemesi başlangıç: sol=M{}, ileri=M{}+M{}, sağ=M{}",
+         motor_esleme.sol, motor_esleme.ileri1, motor_esleme.ileri2, motor_esleme.sag,
+     );
++    let dr_ayar = dead_reckoning.ayar();
++    println!(
++        "PWM dead reckoning: ileri_max={:.2} m/s, yatay_max={:.2} m/s, ölü_bölge={:.3}",
++        dr_ayar.max_ileri_hiz_m_s,
++        dr_ayar.max_yatay_hiz_m_s,
++        dr_ayar.pwm_olu_bolge,
++    );
+     loop {
+         tick.tick().await;
+         let simdi = Instant::now();
+@@ -412,6 +423,13 @@
+                 GelenTelemetri::TelemetriHeartbeat => {
+                     // Bağlantı watchdog'u telemetri katmanında tutulur.
+                 }
++                GelenTelemetri::DeadReckoningSifirla => {
++                    dr_reset_istendi = true;
++                    dr_bekleme_bildirildi = false;
++                    println!(
++                        "DR sıfırlama istendi: güncel GPS konumu ve IMU yaw yeni merkez olacak."
++                    );
++                }
+                 GelenTelemetri::RotaBelirle(noktalar) => {
+                     nav.set_rota(noktalar);
+                     son_manuel_ileri = 0.0;
+@@ -578,6 +596,35 @@
+             }
+         }
+ 
++        // Tahmini iz GPS'ten bağımsız ilerler. İlk geçerli GPS+IMU geldiğinde veya
++        // YKİ CMD:DR:RESET gönderdiğinde o anki konum/yaw yeni merkez kabul edilir.
++        if (!dead_reckoning.aktif_mi() || dr_reset_istendi) && gps_hazir && imu_hazir {
++            if dead_reckoning.sifirla(&gps, imu.yaw) {
++                dr_reset_istendi = false;
++                dr_bekleme_bildirildi = false;
++                println!(
++                    "DR merkezi ayarlandı: GPS={:.7},{:.7} referans_yaw={:.2}°",
++                    gps.enlem as f64 / 10_000_000.0,
++                    gps.boylam as f64 / 10_000_000.0,
++                    imu.yaw,
++                );
++            }
++        } else if dr_reset_istendi && !dr_bekleme_bildirildi {
++            eprintln!(
++                "DR sıfırlama bekliyor: geçerli/taze GPS ve IMU birlikte gerekli."
++            );
++            dr_bekleme_bildirildi = true;
++        }
++
++        let dr_cikti = dead_reckoning.guncelle(
++            dt,
++            &motor_istek,
++            motor_esleme,
++            imu.yaw,
++            imu_hazir,
++            gps_hazir.then_some(&gps),
++        );
++
+         let _ = motor_tx.send(motor_istek.clone());
+ 
+         telemetri_sayaci += 1;
+@@ -606,6 +653,7 @@
+                     motor_istek.sancakon,
+                     motor_istek.sancakarka,
+                 ),
++                dead_reckoning: dr_cikti,
+             };
+             // Telemetri kopukken bu kanalın dolması navigasyon döngüsünü kesinlikle
+             // durdurmamalı. Paket sığmıyorsa eski telemetri atılır, dönüş sürer.
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/src/dead_reckoning.rs /mnt/data/work_gps_dr/pi4_baba6211/src/dead_reckoning.rs
+--- /mnt/data/dr_baseline/pi4_baba6211/src/dead_reckoning.rs	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/src/dead_reckoning.rs	2026-07-18 18:06:54.929168213 +0000
+@@ -0,0 +1,383 @@
++use std::env;
++
++use crate::veri_tipleri::{
++    DeadReckoningTelemetri, GpsVeri, MotorEsleme, MotorVeri,
++};
++
++const METRE_BASINA_ENLEM_DERECESI: f64 = 1.0 / 111_320.0;
++const VARSAYILAN_MAX_ILERI_HIZ_M_S: f64 = 2.0;
++const VARSAYILAN_MAX_YATAY_HIZ_M_S: f64 = 0.45;
++const VARSAYILAN_PWM_OLU_BOLGE: f64 = 0.03;
++const MAX_DT_S: f64 = 0.25;
++
++#[derive(Debug, Clone, Copy)]
++pub struct DeadReckoningAyar {
++    /// İki ileri motor 1000 komutundayken kabul edilen yaklaşık tekne hızı.
++    pub max_ileri_hiz_m_s: f64,
++    /// Sağ/sol yatay motor 1000 komutundayken kabul edilen yaklaşık yanal hız.
++    pub max_yatay_hiz_m_s: f64,
++    /// 0..1 normalize PWM ölü bölgesi.
++    pub pwm_olu_bolge: f64,
++}
++
++impl Default for DeadReckoningAyar {
++    fn default() -> Self {
++        Self {
++            max_ileri_hiz_m_s: VARSAYILAN_MAX_ILERI_HIZ_M_S,
++            max_yatay_hiz_m_s: VARSAYILAN_MAX_YATAY_HIZ_M_S,
++            pwm_olu_bolge: VARSAYILAN_PWM_OLU_BOLGE,
++        }
++    }
++}
++
++impl DeadReckoningAyar {
++    pub fn ortamdan_oku() -> Self {
++        let varsayilan = Self::default();
++        Self {
++            max_ileri_hiz_m_s: pozitif_env_f64(
++                "IDA_DR_MAX_FORWARD_MPS",
++                varsayilan.max_ileri_hiz_m_s,
++            ),
++            max_yatay_hiz_m_s: sifir_veya_pozitif_env_f64(
++                "IDA_DR_MAX_LATERAL_MPS",
++                varsayilan.max_yatay_hiz_m_s,
++            ),
++            pwm_olu_bolge: aralik_env_f64(
++                "IDA_DR_PWM_DEADZONE",
++                varsayilan.pwm_olu_bolge,
++                0.0,
++                0.90,
++            ),
++        }
++    }
++}
++
++fn pozitif_env_f64(ad: &str, varsayilan: f64) -> f64 {
++    match env::var(ad) {
++        Ok(deger) => match deger.parse::<f64>() {
++            Ok(v) if v.is_finite() && v > 0.0 => v,
++            _ => {
++                eprintln!("{ad} geçersiz ({deger:?}); {varsayilan} kullanılacak.");
++                varsayilan
++            }
++        },
++        Err(_) => varsayilan,
++    }
++}
++
++fn sifir_veya_pozitif_env_f64(ad: &str, varsayilan: f64) -> f64 {
++    match env::var(ad) {
++        Ok(deger) => match deger.parse::<f64>() {
++            Ok(v) if v.is_finite() && v >= 0.0 => v,
++            _ => {
++                eprintln!("{ad} geçersiz ({deger:?}); {varsayilan} kullanılacak.");
++                varsayilan
++            }
++        },
++        Err(_) => varsayilan,
++    }
++}
++
++fn aralik_env_f64(ad: &str, varsayilan: f64, min: f64, max: f64) -> f64 {
++    match env::var(ad) {
++        Ok(deger) => match deger.parse::<f64>() {
++            Ok(v) if v.is_finite() && (min..=max).contains(&v) => v,
++            _ => {
++                eprintln!("{ad} geçersiz ({deger:?}); {varsayilan} kullanılacak.");
++                varsayilan
++            }
++        },
++        Err(_) => varsayilan,
++    }
++}
++
++#[derive(Debug)]
++pub struct DeadReckoning {
++    ayar: DeadReckoningAyar,
++    aktif: bool,
++    baslangic_enlem: f64,
++    baslangic_boylam: f64,
++    cos_enlem: f64,
++    dogu_m: f64,
++    kuzey_m: f64,
++    toplam_mesafe_m: f64,
++    referans_yaw_deg: f64,
++    son_cikti: DeadReckoningTelemetri,
++}
++
++impl DeadReckoning {
++    pub fn new() -> Self {
++        Self::with_ayar(DeadReckoningAyar::ortamdan_oku())
++    }
++
++    pub fn with_ayar(ayar: DeadReckoningAyar) -> Self {
++        Self {
++            ayar,
++            aktif: false,
++            baslangic_enlem: 0.0,
++            baslangic_boylam: 0.0,
++            cos_enlem: 1.0,
++            dogu_m: 0.0,
++            kuzey_m: 0.0,
++            toplam_mesafe_m: 0.0,
++            referans_yaw_deg: 0.0,
++            son_cikti: DeadReckoningTelemetri::default(),
++        }
++    }
++
++    pub fn aktif_mi(&self) -> bool {
++        self.aktif
++    }
++
++    pub fn ayar(&self) -> DeadReckoningAyar {
++        self.ayar
++    }
++
++    /// O andaki GPS konumunu ve IMU yaw değerini yeni merkez/referans kabul eder.
++    /// Bu çağrı tahmini izi sıfırlar; GPS izi ise ayrı olarak devam eder.
++    pub fn sifirla(&mut self, gps: &GpsVeri, yaw_deg: f32) -> bool {
++        let enlem = gps.enlem as f64 / 10_000_000.0;
++        let boylam = gps.boylam as f64 / 10_000_000.0;
++        let yaw = yaw_deg as f64;
++
++        if !koordinat_gecerli(enlem, boylam) || !yaw.is_finite() {
++            return false;
++        }
++
++        self.aktif = true;
++        self.baslangic_enlem = enlem;
++        self.baslangic_boylam = boylam;
++        self.cos_enlem = enlem.to_radians().cos().abs().max(1.0e-6);
++        self.dogu_m = 0.0;
++        self.kuzey_m = 0.0;
++        self.toplam_mesafe_m = 0.0;
++        self.referans_yaw_deg = yaw.rem_euclid(360.0);
++        self.son_cikti = DeadReckoningTelemetri {
++            aktif: true,
++            enlem,
++            boylam,
++            mutlak_yaw_deg: self.referans_yaw_deg as f32,
++            goreli_yaw_deg: 0.0,
++            referans_yaw_deg: self.referans_yaw_deg as f32,
++            ileri_hiz_m_s: 0.0,
++            yatay_hiz_m_s: 0.0,
++            toplam_mesafe_m: 0.0,
++            gps_fark_m: 0.0,
++        };
++        true
++    }
++
++    /// PWM ve güncel IMU yaw üzerinden bağımsız tahmini konumu ilerletir.
++    /// GPS yalnızca ekranda gösterilecek hata mesafesini ölçmek için kullanılır;
++    /// tahmini izi GPS'e yapıştırmaz.
++    pub fn guncelle(
++        &mut self,
++        dt_s: f64,
++        motor: &MotorVeri,
++        esleme: MotorEsleme,
++        yaw_deg: f32,
++        imu_hazir: bool,
++        gps: Option<&GpsVeri>,
++    ) -> DeadReckoningTelemetri {
++        if !self.aktif {
++            return DeadReckoningTelemetri::default();
++        }
++
++        let yaw = yaw_deg as f64;
++        let dt = dt_s.clamp(0.0, MAX_DT_S);
++        let mut ileri_hiz = 0.0;
++        let mut yatay_hiz = 0.0;
++
++        if imu_hazir && yaw.is_finite() && dt > 0.0 && esleme.gecerli() {
++            let ileri1 = pwm_orani(
++                motor_degeri(motor, esleme.ileri1),
++                self.ayar.pwm_olu_bolge,
++            );
++            let ileri2 = pwm_orani(
++                motor_degeri(motor, esleme.ileri2),
++                self.ayar.pwm_olu_bolge,
++            );
++            let sol = pwm_orani(motor_degeri(motor, esleme.sol), self.ayar.pwm_olu_bolge);
++            let sag = pwm_orani(motor_degeri(motor, esleme.sag), self.ayar.pwm_olu_bolge);
++
++            ileri_hiz = ((ileri1 + ileri2) * 0.5) * self.ayar.max_ileri_hiz_m_s;
++            // Pozitif değer aracın gövdesine göre sağ yönü temsil eder.
++            yatay_hiz = (sag - sol) * self.ayar.max_yatay_hiz_m_s;
++
++            let heading_rad = yaw.rem_euclid(360.0).to_radians();
++            let dogu_hiz = ileri_hiz * heading_rad.sin() + yatay_hiz * heading_rad.cos();
++            let kuzey_hiz = ileri_hiz * heading_rad.cos() - yatay_hiz * heading_rad.sin();
++            let dogu_adim = dogu_hiz * dt;
++            let kuzey_adim = kuzey_hiz * dt;
++
++            self.dogu_m += dogu_adim;
++            self.kuzey_m += kuzey_adim;
++            self.toplam_mesafe_m += dogu_adim.hypot(kuzey_adim);
++        }
++
++        let enlem = self.baslangic_enlem + self.kuzey_m * METRE_BASINA_ENLEM_DERECESI;
++        let boylam = self.baslangic_boylam
++            + self.dogu_m * METRE_BASINA_ENLEM_DERECESI / self.cos_enlem;
++        let mutlak_yaw = if yaw.is_finite() {
++            yaw.rem_euclid(360.0)
++        } else {
++            self.son_cikti.mutlak_yaw_deg as f64
++        };
++        let goreli_yaw = normalize_signed_deg(mutlak_yaw - self.referans_yaw_deg);
++        let gps_fark_m = gps
++            .filter(|g| gps_koordinat_gecerli(g))
++            .map(|g| {
++                let gps_enlem = g.enlem as f64 / 10_000_000.0;
++                let gps_boylam = g.boylam as f64 / 10_000_000.0;
++                iki_konum_arasi_m(enlem, boylam, gps_enlem, gps_boylam)
++            })
++            .unwrap_or(self.son_cikti.gps_fark_m as f64);
++
++        self.son_cikti = DeadReckoningTelemetri {
++            aktif: true,
++            enlem,
++            boylam,
++            mutlak_yaw_deg: mutlak_yaw as f32,
++            goreli_yaw_deg: goreli_yaw as f32,
++            referans_yaw_deg: self.referans_yaw_deg as f32,
++            ileri_hiz_m_s: ileri_hiz as f32,
++            yatay_hiz_m_s: yatay_hiz as f32,
++            toplam_mesafe_m: self.toplam_mesafe_m as f32,
++            gps_fark_m: gps_fark_m as f32,
++        };
++        self.son_cikti
++    }
++}
++
++fn motor_degeri(motor: &MotorVeri, kanal: u8) -> u16 {
++    match kanal {
++        1 => motor.iskeleon,
++        2 => motor.iskelearka,
++        3 => motor.sancakon,
++        4 => motor.sancakarka,
++        _ => 0,
++    }
++}
++
++fn pwm_orani(pwm: u16, olu_bolge: f64) -> f64 {
++    let oran = (pwm.min(1000) as f64) / 1000.0;
++    if oran <= olu_bolge {
++        0.0
++    } else {
++        ((oran - olu_bolge) / (1.0 - olu_bolge)).clamp(0.0, 1.0)
++    }
++}
++
++fn normalize_signed_deg(mut derece: f64) -> f64 {
++    while derece > 180.0 {
++        derece -= 360.0;
++    }
++    while derece < -180.0 {
++        derece += 360.0;
++    }
++    derece
++}
++
++fn koordinat_gecerli(enlem: f64, boylam: f64) -> bool {
++    enlem.is_finite()
++        && boylam.is_finite()
++        && (-90.0..=90.0).contains(&enlem)
++        && (-180.0..=180.0).contains(&boylam)
++        && !(enlem == 0.0 && boylam == 0.0)
++}
++
++fn gps_koordinat_gecerli(gps: &GpsVeri) -> bool {
++    koordinat_gecerli(
++        gps.enlem as f64 / 10_000_000.0,
++        gps.boylam as f64 / 10_000_000.0,
++    )
++}
++
++fn iki_konum_arasi_m(enlem1: f64, boylam1: f64, enlem2: f64, boylam2: f64) -> f64 {
++    let ortalama_enlem = ((enlem1 + enlem2) * 0.5).to_radians().cos();
++    let kuzey = (enlem2 - enlem1) * 111_320.0;
++    let dogu = (boylam2 - boylam1) * 111_320.0 * ortalama_enlem;
++    dogu.hypot(kuzey)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn gps() -> GpsVeri {
++        GpsVeri {
++            algi_boyut: 3,
++            uydu_sayi: 10,
++            enlem: 410_000_000,
++            boylam: 290_000_000,
++            ..GpsVeri::default()
++        }
++    }
++
++    fn test_ayar() -> DeadReckoningAyar {
++        DeadReckoningAyar {
++            max_ileri_hiz_m_s: 2.0,
++            max_yatay_hiz_m_s: 0.0,
++            pwm_olu_bolge: 0.0,
++        }
++    }
++
++    #[test]
++    fn sifir_pwm_konumu_degistirmez() {
++        let mut dr = DeadReckoning::with_ayar(test_ayar());
++        assert!(dr.sifirla(&gps(), 0.0));
++        let c = dr.guncelle(
++            1.0,
++            &MotorVeri::default(),
++            MotorEsleme::default(),
++            0.0,
++            true,
++            Some(&gps()),
++        );
++        assert!((c.enlem - 41.0).abs() < 1.0e-9);
++        assert!((c.boylam - 29.0).abs() < 1.0e-9);
++    }
++
++    #[test]
++    fn kuzeye_ileri_pwm_konumu_ilerletir() {
++        let mut dr = DeadReckoning::with_ayar(test_ayar());
++        assert!(dr.sifirla(&gps(), 0.0));
++        let esleme = MotorEsleme::default();
++        let mut motor = MotorVeri::default();
++        super::set_test_motor(&mut motor, esleme.ileri1, 1000);
++        super::set_test_motor(&mut motor, esleme.ileri2, 1000);
++        let c = dr.guncelle(1.0, &motor, esleme, 0.0, true, None);
++        // Güvenlik nedeniyle tek döngü dt'si 250 ms ile sınırlandırılır: yaklaşık 0.5 m.
++        assert!((c.toplam_mesafe_m - 0.5).abs() < 0.01);
++        assert!(c.enlem > 41.0);
++    }
++
++    #[test]
++    fn referansa_gore_yaw_eksi_arti_180_arasinda() {
++        let mut dr = DeadReckoning::with_ayar(test_ayar());
++        assert!(dr.sifirla(&gps(), 350.0));
++        let c = dr.guncelle(
++            0.05,
++            &MotorVeri::default(),
++            MotorEsleme::default(),
++            10.0,
++            true,
++            None,
++        );
++        assert!((c.goreli_yaw_deg - 20.0).abs() < 0.01);
++    }
++
++    // Testlerin özel kanal yazıcısı üretim koduna açılmasın.
++    fn _dummy() {}
++}
++
++#[cfg(test)]
++fn set_test_motor(motor: &mut MotorVeri, kanal: u8, deger: u16) {
++    match kanal {
++        1 => motor.iskeleon = deger,
++        2 => motor.iskelearka = deger,
++        3 => motor.sancakon = deger,
++        4 => motor.sancakarka = deger,
++        _ => {}
++    }
++}
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/src/main.rs /mnt/data/work_gps_dr/pi4_baba6211/src/main.rs
+--- /mnt/data/dr_baseline/pi4_baba6211/src/main.rs	2026-07-18 08:39:28.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/src/main.rs	2026-07-18 18:07:24.531488534 +0000
+@@ -1,4 +1,5 @@
+ mod beyin;
++mod dead_reckoning;
+ mod haberlesme;
+ mod motorlar;
+ mod sensorler;
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/src/telemetri.rs /mnt/data/work_gps_dr/pi4_baba6211/src/telemetri.rs
+--- /mnt/data/dr_baseline/pi4_baba6211/src/telemetri.rs	2026-07-18 08:39:28.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/src/telemetri.rs	2026-07-18 18:07:24.532058404 +0000
+@@ -31,6 +31,7 @@
+         "START" => Some(GelenTelemetri::GoreviBaslat),
+         "STOP" => Some(GelenTelemetri::AcilDurdur),
+         "PING" => Some(GelenTelemetri::TelemetriHeartbeat),
++        "DR" if args == Some("RESET") => Some(GelenTelemetri::DeadReckoningSifirla),
+         "HOME" => {
+             let mut vals = args?.split(',');
+             let lat = vals.next()?.parse::<f64>().ok()?;
+@@ -247,7 +248,7 @@
+                         continue;
+                     }
+ 
+-                    let (nav_str, mot_str) = telemetri.to_rf_strings();
++                    let (nav_str, mot_str, dr_str) = telemetri.to_rf_strings();
+ 
+                     if let Err(e) = yazar.write_all(nav_str.as_bytes()).await {
+                         eprintln!("Telemetri NAV yazma hatası: {e}");
+@@ -259,6 +260,11 @@
+                         break 'baglanti;
+                     }
+ 
++                    if let Err(e) = yazar.write_all(dr_str.as_bytes()).await {
++                        eprintln!("Telemetri DR yazma hatası: {e}");
++                        break 'baglanti;
++                    }
++
+                     if let Err(e) = yazar.flush().await {
+                         eprintln!("Telemetri flush hatası: {e}");
+                         break 'baglanti;
+@@ -329,4 +335,12 @@
+             Some(GelenTelemetri::TelemetriHeartbeat)
+         ));
+     }
++
++    #[test]
++    fn dead_reckoning_reset_cozumlenir() {
++        assert!(matches!(
++            parse_yk_komut("CMD:DR:RESET"),
++            Some(GelenTelemetri::DeadReckoningSifirla)
++        ));
++    }
+ }
+diff -ruN /mnt/data/dr_baseline/pi4_baba6211/src/veri_tipleri.rs /mnt/data/work_gps_dr/pi4_baba6211/src/veri_tipleri.rs
+--- /mnt/data/dr_baseline/pi4_baba6211/src/veri_tipleri.rs	2026-07-18 08:40:10.000000000 +0000
++++ /mnt/data/work_gps_dr/pi4_baba6211/src/veri_tipleri.rs	2026-07-18 18:07:10.934135919 +0000
+@@ -125,6 +125,25 @@
+     TelemetriKoptu,
+     /// İsteğe bağlı bağlantı watchdog paketi.
+     TelemetriHeartbeat,
++    /// O anki GPS konumu ve IMU yaw değerini tahmini iz için yeni merkez kabul eder.
++    DeadReckoningSifirla,
++}
++
++
++#[derive(Debug, Clone, Copy, Default)]
++pub struct DeadReckoningTelemetri {
++    pub aktif: bool,
++    pub enlem: f64,
++    pub boylam: f64,
++    /// IMU'dan gelen 0..360 mutlak yaw.
++    pub mutlak_yaw_deg: f32,
++    /// Dead reckoning sıfırlandığı andaki yöne göre -180..180 dönüş açısı.
++    pub goreli_yaw_deg: f32,
++    pub referans_yaw_deg: f32,
++    pub ileri_hiz_m_s: f32,
++    pub yatay_hiz_m_s: f32,
++    pub toplam_mesafe_m: f32,
++    pub gps_fark_m: f32,
+ }
+ 
+ #[derive(Debug, Default, Clone)]
+@@ -138,6 +157,7 @@
+     pub arac_mod: AracMod,
+     pub motorlar_veri: (u16, u16, u16, u16),
+     pub motorlar_istek: (u16, u16, u16, u16),
++    pub dead_reckoning: DeadReckoningTelemetri,
+ }
+ 
+ pub fn calc_checksum(payload: &str) -> String {
+@@ -149,7 +169,7 @@
+ }
+ 
+ impl GidenTelemetri {
+-    pub fn to_rf_strings(&self) -> (String, String) {
++    pub fn to_rf_strings(&self) -> (String, String, String) {
+         let nav_payload = format!(
+             "NAV:{:.6},{:.6},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{}",
+             self.arac_enlem,
+@@ -175,9 +195,25 @@
+             self.motorlar_istek.3
+         );
+ 
++        let dr = self.dead_reckoning;
++        let dr_payload = format!(
++            "DR:{:.7},{:.7},{:.2},{:.2},{:.2},{:.3},{:.3},{:.2},{:.2},{}",
++            dr.enlem,
++            dr.boylam,
++            dr.mutlak_yaw_deg,
++            dr.goreli_yaw_deg,
++            dr.referans_yaw_deg,
++            dr.ileri_hiz_m_s,
++            dr.yatay_hiz_m_s,
++            dr.toplam_mesafe_m,
++            dr.gps_fark_m,
++            dr.aktif as u8,
++        );
++
+         (
+             format!("{}*{}\n", nav_payload, calc_checksum(&nav_payload)),
+             format!("{}*{}\n", mot_payload, calc_checksum(&mot_payload)),
++            format!("{}*{}\n", dr_payload, calc_checksum(&dr_payload)),
+         )
+     }
+ }
