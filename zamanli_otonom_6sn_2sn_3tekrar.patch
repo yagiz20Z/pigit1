@@ -1,0 +1,375 @@
+--- a/src/beyin.rs
++++ b/src/beyin.rs
+@@ -69,6 +69,7 @@
+ // İlk su testinde düşük güç kullanın. Kenar uzunluğunu KARE_KENAR_SURESI,
+ // ileri/dönüş gücünü PWM sabitleri ile ayarlayın.
+ const KARE_KENAR_SURESI: Duration = Duration::from_secs(6);
++const KARE_DONUS_SURESI: Duration = Duration::from_secs(2);
+ const KARE_ILERI_PWM: u16 = 400;
+ const KARE_SOL_DONUS_PWM: u16 = 400;
+ const KARE_SOL_DONUS_YAVAS_PWM: u16 = 280;
+@@ -82,7 +83,7 @@
+ const KARE_DONUS_INCE_BOLGE_DEG: f32 = 5.0;
+ const KARE_DONUS_DENGE_SURESI: Duration = Duration::from_millis(350);
+ const KARE_DONUS_MAX_SURE: Duration = Duration::from_secs(12);
+-const KARE_KENAR_SAYISI: u8 = 4;
++const KARE_KENAR_SAYISI: u8 = 3;
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ enum KareAsama {
+@@ -445,31 +446,23 @@
+                         pid.integral = 0.0;
+                         kaba_donus_modu = false;
+ 
+-                        if imu_hazir {
+-                            guncel_mod = AracMod::Otonom;
+-                            kare_aktif = true;
+-                            gorev_baslatma_istendi = false;
+-                            kare_tamamlandi = false;
+-                            kare_kenar_no = 1;
+-                            kare_asama = KareAsama::Ileri;
+-                            kare_asama_baslangic = Instant::now();
+-                            kare_imu_bekleme_bildirildi = false;
+-                            println!(
+-                                "KARE OTONOM BAŞLADI: GPS/ROTA kullanılmıyor; 4 x {} sn ileri, her köşe IMU ile {:.1} derece sola dönüş. İleri PWM={}, dönüş PWM={}.",
+-                                KARE_KENAR_SURESI.as_secs(),
+-                                KARE_DONUS_ACISI_DEG,
+-                                KARE_ILERI_PWM,
+-                                KARE_SOL_DONUS_PWM,
+-                            );
+-                        } else {
+-                            guncel_mod = AracMod::GorevBekliyor;
+-                            kare_aktif = false;
+-                            kare_tamamlandi = false;
+-                            kare_kenar_no = 0;
+-                            kare_asama = KareAsama::Hazir;
+-                            eprintln!("START alındı fakat IMU hazır değil; görev IMU gelince otomatik başlayacak.");
+-                            kare_imu_bekleme_bildirildi = true;
+-                        }
++                        guncel_mod = AracMod::Otonom;
++                        kare_aktif = true;
++                        gorev_baslatma_istendi = false;
++                        kare_tamamlandi = false;
++                        kare_kenar_no = 1;
++                        kare_asama = KareAsama::Ileri;
++                        kare_asama_baslangic = Instant::now();
++                        kare_imu_bekleme_bildirildi = false;
++                        println!(
++                            "ZAMANLI OTONOM BAŞLADI: {} tekrar; {} sn M3+M4 ileri, {} sn M{} sola dönüş. İleri PWM={}, dönüş PWM={}.",
++                            KARE_KENAR_SAYISI,
++                            KARE_KENAR_SURESI.as_secs(),
++                            KARE_DONUS_SURESI.as_secs(),
++                            motor_esleme.sol,
++                            KARE_ILERI_PWM,
++                            KARE_SOL_DONUS_PWM,
++                        );
+                     }
+                 }
+                 GelenTelemetri::ModDegistir(istenen_mod) => {
+@@ -488,27 +481,21 @@
+                             pid.integral = 0.0;
+                             kaba_donus_modu = false;
+ 
+-                            if imu_hazir {
+-                                guncel_mod = AracMod::Otonom;
+-                                kare_aktif = true;
+-                                gorev_baslatma_istendi = false;
+-                                kare_tamamlandi = false;
+-                                kare_kenar_no = 1;
+-                                kare_asama = KareAsama::Ileri;
+-                                kare_asama_baslangic = Instant::now();
+-                                kare_imu_bekleme_bildirildi = false;
+-                                println!(
+-                                    "OTONOM TUŞU: GPS/ROTA kullanılmadan kare görevi başladı. Dönüşler IMU yaw ile 90 derece kontrol edilecek."
+-                                );
+-                            } else {
+-                                guncel_mod = AracMod::GorevBekliyor;
+-                                kare_aktif = false;
+-                                kare_tamamlandi = false;
+-                                kare_kenar_no = 0;
+-                                kare_asama = KareAsama::Hazir;
+-                                eprintln!("OTONOM alındı fakat IMU hazır değil; görev IMU gelince otomatik başlayacak.");
+-                                kare_imu_bekleme_bildirildi = true;
+-                            }
++                            guncel_mod = AracMod::Otonom;
++                            kare_aktif = true;
++                            gorev_baslatma_istendi = false;
++                            kare_tamamlandi = false;
++                            kare_kenar_no = 1;
++                            kare_asama = KareAsama::Ileri;
++                            kare_asama_baslangic = Instant::now();
++                            kare_imu_bekleme_bildirildi = false;
++                            println!(
++                                "OTONOM TUŞU: zamanlı görev başladı; {} sn M3+M4 ileri + {} sn M{} sola dönüş, toplam {} tekrar.",
++                                KARE_KENAR_SURESI.as_secs(),
++                                KARE_DONUS_SURESI.as_secs(),
++                                motor_esleme.sol,
++                                KARE_KENAR_SAYISI,
++                            );
+                         }
+                     } else {
+                         // Manuel, görev bekleme veya acil durum seçildiğinde zamanlı görevi
+@@ -648,13 +635,8 @@
+                 }
+             }
+         }
+-        // OTONOM/START komutu IMU'dan önce geldiyse komut kaybolmaz. İlk taze ve
+-        // geçerli IMU paketi geldiğinde GPS beklemeden kare görevi otomatik başlar.
+-        if gorev_baslatma_istendi
+-            && !kare_aktif
+-            && guncel_mod != AracMod::AcilDurum
+-            && imu_hazir
+-        {
++        // Bekleyen START isteği varsa sensör beklemeden zamanlı görevi başlat.
++        if gorev_baslatma_istendi && !kare_aktif && guncel_mod != AracMod::AcilDurum {
+             guncel_mod = AracMod::Otonom;
+             kare_aktif = true;
+             gorev_baslatma_istendi = false;
+@@ -662,18 +644,7 @@
+             kare_kenar_no = 1;
+             kare_asama = KareAsama::Ileri;
+             kare_asama_baslangic = Instant::now();
+-            kare_donus_birikimli_deg = 0.0;
+-            kare_donus_yon_isareti = 0.0;
+-            kare_imu_bekleme_bildirildi = false;
+-            println!("IMU hazır: bekleyen GPS'siz kare görevi otomatik başlatıldı. Kenar 1/4 ileri.");
+-        } else if gorev_baslatma_istendi
+-            && !kare_aktif
+-            && guncel_mod != AracMod::AcilDurum
+-            && !imu_hazir
+-            && !kare_imu_bekleme_bildirildi
+-        {
+-            eprintln!("KARE BEKLEME: GPS gerekmiyor; yalnızca taze/geçerli IMU bekleniyor.");
+-            kare_imu_bekleme_bildirildi = true;
++            println!("Bekleyen zamanlı otonom görev başladı.");
+         }
+ 
+         let mut motor_istek = MotorVeri::default();
+@@ -686,185 +657,60 @@
+         }
+ 
+         // ---------------------------------------------------------------------
+-        // GPS'SİZ, IMU DÖNÜŞ KONTROLLÜ KARE HAREKETİ
++        // ZAMANLI OTONOM: 6 SN İLERİ + 2 SN SOLA, 3 TEKRAR
+         // ---------------------------------------------------------------------
+-        // Düz kenarlar süreyle ilerler. Köşelerde yalnız IMU yaw değişimi kullanılır.
+-        // GPS fix, uydu sayısı, origin ve rota bu kare görevinin motor kararına girmez.
++        // İleri hareket M3+M4 (motor_esleme.ileri1 + ileri2), sola dönüş yalnız
++        // M1 (motor_esleme.sol) ile yapılır. GPS ve IMU bu test görevinde aranmaz.
+         if guncel_mod == AracMod::Otonom && kare_aktif {
+-            if !imu_hazir {
+-                // IMU kaybolursa kör dönüş yapılmaz. Motorlar bu turda sıfır kalır ve
+-                // görev güvenli biçimde iptal edilir.
+-                kare_aktif = false;
+-                gorev_baslatma_istendi = false;
+-                kare_asama = KareAsama::Hazir;
+-                kare_kenar_no = 0;
+-                guncel_mod = AracMod::GorevBekliyor;
+-                eprintln!("KARE İPTAL: IMU verisi taze/geçerli değil. GPS eksikliği görevi etkilemez.");
+-            } else {
+-                match kare_asama {
+-                    KareAsama::Ileri => {
+-                        if kare_asama_baslangic.elapsed() >= KARE_KENAR_SURESI {
+-                            if kare_kenar_no >= KARE_KENAR_SAYISI {
+-                                kare_aktif = false;
+-                                kare_tamamlandi = true;
+-                                kare_asama = KareAsama::Tamamlandi;
+-                                guncel_mod = AracMod::GorevBekliyor;
+-                                gorev_baslatma_istendi = false;
+-                                println!(
+-                                    "KARE GÖREVİ TAMAMLANDI: 4. kenar bitti, bütün motorlar durduruldu."
+-                                );
+-                            } else {
+-                                kare_asama = KareAsama::SolaDon;
+-                                kare_asama_baslangic = Instant::now();
+-                                kare_donus_baslangic_yaw = aci_normalize_360(imu.yaw);
+-                                kare_onceki_yaw = kare_donus_baslangic_yaw;
+-                                kare_donus_birikimli_deg = 0.0;
+-                                kare_donus_yon_isareti = 0.0;
+-                                kare_hedef_yaw = kare_donus_baslangic_yaw;
+-                                kare_hedefte_baslangic = None;
+-                                println!(
+-                                    "KARE: {}. kenar tamamlandı; IMU yaw={:.2}°. 90° sola dönüş başladı.",
+-                                    kare_kenar_no,
+-                                    kare_donus_baslangic_yaw,
+-                                );
+-                            }
+-                        } else {
+-                            motor_kanalina_yaz(
+-                                &mut motor_istek,
+-                                motor_esleme.ileri1,
+-                                KARE_ILERI_PWM,
+-                            );
+-                            motor_kanalina_yaz(
+-                                &mut motor_istek,
+-                                motor_esleme.ileri2,
+-                                KARE_ILERI_PWM,
+-                            );
+-                        }
++            match kare_asama {
++                KareAsama::Ileri => {
++                    if kare_asama_baslangic.elapsed() >= KARE_KENAR_SURESI {
++                        kare_asama = KareAsama::SolaDon;
++                        kare_asama_baslangic = Instant::now();
++                        println!(
++                            "ZAMANLI GÖREV: {}/{} ileri tamam; {} saniye M{} sola dönüş başladı.",
++                            kare_kenar_no,
++                            KARE_KENAR_SAYISI,
++                            KARE_DONUS_SURESI.as_secs(),
++                            motor_esleme.sol,
++                        );
++                    } else {
++                        motor_kanalina_yaz(&mut motor_istek, motor_esleme.ileri1, KARE_ILERI_PWM);
++                        motor_kanalina_yaz(&mut motor_istek, motor_esleme.ileri2, KARE_ILERI_PWM);
+                     }
+-                    KareAsama::SolaDon => {
+-                        if imu_yeni {
+-                            let guncel_yaw = aci_normalize_360(imu.yaw);
+-                            let delta = aci_farki_deg(guncel_yaw, kare_onceki_yaw);
+-                            kare_onceki_yaw = guncel_yaw;
+-
+-                            // Tek pakette 45 dereceden büyük sıçrama sensör/parsing hatası
+-                            // kabul edilir ve dönüş hesabına katılmaz.
+-                            if delta.abs() <= 45.0 {
+-                                if kare_donus_yon_isareti == 0.0 && delta.abs() >= 0.20 {
+-                                    kare_donus_yon_isareti = delta.signum();
+-                                    kare_hedef_yaw = aci_normalize_360(
+-                                        kare_donus_baslangic_yaw
+-                                            + kare_donus_yon_isareti * KARE_DONUS_ACISI_DEG,
+-                                    );
+-                                    println!(
+-                                        "KARE IMU yönü algılandı: işaret={:+.0}, hedef_yaw={:.2}°",
+-                                        kare_donus_yon_isareti,
+-                                        kare_hedef_yaw,
+-                                    );
+-                                }
+-
+-                                if kare_donus_yon_isareti != 0.0 {
+-                                    // Gerçek dönüş yönündeki ilerlemeyi toplar; ters yöndeki
+-                                    // küçük salınımlar birikimli açıdan düşülür.
+-                                    let hizali_delta = delta * kare_donus_yon_isareti;
+-                                    kare_donus_birikimli_deg =
+-                                        (kare_donus_birikimli_deg + hizali_delta).max(0.0);
+-                                }
+-                            }
+-                        }
+-
+-                        // BNO085'in mutlak yaw değerinden hedefe kalan imzalı açıyı
+-                        // hesapla. Pozitif değer ilk dönüş motoru yönünde daha dönülmesi,
+-                        // negatif değer ise ataletle hedefin aşıldığı anlamına gelir.
+-                        let guncel_yaw = aci_normalize_360(imu.yaw);
+-                        let hedef_hatasi = if kare_donus_yon_isareti != 0.0 {
+-                            kare_donus_yon_isareti
+-                                * aci_farki_deg(kare_hedef_yaw, guncel_yaw)
+-                        } else {
+-                            KARE_DONUS_ACISI_DEG
+-                        };
+-                        let mut donus_tamam = false;
+-
+-                        if kare_donus_yon_isareti != 0.0
+-                            && hedef_hatasi.abs() <= KARE_DONUS_TOLERANSI_DEG
+-                        {
+-                            // Tolerans içindeyken motor kapalıdır. Yaw 350 ms boyunca
+-                            // +/-1 derece içinde kalırsa dönüş bitmiş kabul edilir.
+-                            let baslangic = kare_hedefte_baslangic.get_or_insert_with(Instant::now);
+-                            donus_tamam = imu_yeni
+-                                && baslangic.elapsed() >= KARE_DONUS_DENGE_SURESI;
+-                        } else {
+-                            kare_hedefte_baslangic = None;
+-                        }
+-
+-                        if donus_tamam {
+-                            let bitis_yaw = aci_normalize_360(imu.yaw);
+-                            let gercek_donus = kare_donus_yon_isareti
+-                                * aci_farki_deg(bitis_yaw, kare_donus_baslangic_yaw);
++                }
++                KareAsama::SolaDon => {
++                    if kare_asama_baslangic.elapsed() >= KARE_DONUS_SURESI {
++                        if kare_kenar_no >= KARE_KENAR_SAYISI {
++                            kare_aktif = false;
++                            kare_tamamlandi = true;
++                            kare_asama = KareAsama::Tamamlandi;
++                            guncel_mod = AracMod::GorevBekliyor;
++                            gorev_baslatma_istendi = false;
+                             println!(
+-                                "KARE: BNO085 dönüşü tamamlandı; başlangıç={:.2}°, hedef={:.2}°, bitiş={:.2}°, gerçek={:.2}°, hata={:+.2}°. {}. kenar 6 saniye ileri başlıyor.",
+-                                kare_donus_baslangic_yaw,
+-                                kare_hedef_yaw,
+-                                bitis_yaw,
+-                                gercek_donus,
+-                                hedef_hatasi,
+-                                kare_kenar_no + 1,
++                                "ZAMANLI OTONOM TAMAMLANDI: {} tekrar bitti; bütün motorlar durduruldu.",
++                                KARE_KENAR_SAYISI,
+                             );
++                        } else {
+                             kare_kenar_no += 1;
+                             kare_asama = KareAsama::Ileri;
+                             kare_asama_baslangic = Instant::now();
+-                            kare_donus_birikimli_deg = 0.0;
+-                            kare_donus_yon_isareti = 0.0;
+-                            kare_hedefte_baslangic = None;
+-                        } else if kare_asama_baslangic.elapsed() >= KARE_DONUS_MAX_SURE {
+-                            kare_aktif = false;
+-                            kare_tamamlandi = false;
+-                            gorev_baslatma_istendi = false;
+-                            kare_asama = KareAsama::Hazir;
+-                            kare_kenar_no = 0;
+-                            kare_hedefte_baslangic = None;
+-                            guncel_mod = AracMod::GorevBekliyor;
+-                            eprintln!(
+-                                "KARE İPTAL: BNO085 ile 90° dönüş {} saniyede dengelenemedi (hedef={:.2}°, anlık={:.2}°, hata={:+.2}°). Motorlar durduruldu.",
+-                                KARE_DONUS_MAX_SURE.as_secs(),
+-                                kare_hedef_yaw,
+-                                guncel_yaw,
+-                                hedef_hatasi,
+-                            );
+-                        } else if kare_donus_yon_isareti == 0.0 {
+-                            // İlk yaw değişiminden gerçek dönüş yönünü öğrenene kadar
+-                            // sola dönüş motorunu düşük riskli normal güçte çalıştır.
+-                            motor_kanalina_yaz(
+-                                &mut motor_istek,
+-                                motor_esleme.sol,
+-                                KARE_SOL_DONUS_PWM,
+-                            );
+-                        } else if hedef_hatasi > KARE_DONUS_TOLERANSI_DEG {
+-                            // Hedefe yaklaşırken kademeli yavaşla.
+-                            let donus_pwm = if hedef_hatasi <= KARE_DONUS_INCE_BOLGE_DEG {
+-                                KARE_DONUS_INCE_PWM
+-                            } else if hedef_hatasi <= KARE_DONUS_YAVAS_BOLGE_DEG {
+-                                KARE_SOL_DONUS_YAVAS_PWM
+-                            } else {
+-                                KARE_SOL_DONUS_PWM
+-                            };
+-                            motor_kanalina_yaz(
+-                                &mut motor_istek,
+-                                motor_esleme.sol,
+-                                donus_pwm,
+-                            );
+-                        } else if hedef_hatasi < -KARE_DONUS_TOLERANSI_DEG {
+-                            // Ataletle hedef aşılırsa karşı yöndeki motorla ince düzeltme.
+-                            motor_kanalina_yaz(
+-                                &mut motor_istek,
+-                                motor_esleme.sag,
+-                                KARE_DONUS_INCE_PWM,
++                            println!(
++                                "ZAMANLI GÖREV: {}/{} tur başladı; {} saniye M3+M4 ileri.",
++                                kare_kenar_no,
++                                KARE_KENAR_SAYISI,
++                                KARE_KENAR_SURESI.as_secs(),
+                             );
+                         }
+-                        // Tolerans içindeyken bu tur motor_istek sıfır kalır.
++                    } else {
++                        motor_kanalina_yaz(
++                            &mut motor_istek,
++                            motor_esleme.sol,
++                            KARE_SOL_DONUS_PWM,
++                        );
+                     }
+-                    KareAsama::Hazir | KareAsama::Tamamlandi => {}
+                 }
++                KareAsama::Hazir | KareAsama::Tamamlandi => {}
+             }
+         }
+ 
